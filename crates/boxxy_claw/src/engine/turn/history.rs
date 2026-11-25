@@ -9,6 +9,57 @@ pub const SESSION_CHECKPOINT_ACK: &str = "Understood. Retaining session checkpoi
 const TRANSCRIPT_CLIP_CHARS: usize = 2_000;
 const TRANSCRIPT_CLIP_SUFFIX: &str =
     "\n...[stale tool output clipped — re-run file_read or grep_search if current contents are needed]";
+const USER_INTERRUPTION_PREFIX: &str =
+    "[USER_INTERRUPTION]: The user did not approve this proposal and instead sent a new instruction: \"";
+const USER_INTERRUPTION_SUFFIX: &str =
+    "\". Do NOT retry the rejected proposal; address the user's new instruction immediately.";
+
+/// Extracts the user's steering instruction from an `ApprovalOutcome::Interrupted` tool error string.
+#[must_use]
+pub(crate) fn extract_interruption_user_text(raw: &str) -> Option<&str> {
+    let rest = raw.trim().strip_prefix(USER_INTERRUPTION_PREFIX)?;
+    let inner = rest.strip_suffix(USER_INTERRUPTION_SUFFIX).unwrap_or(rest);
+    let cleaned = crate::engine::summarization::history::clean_user_text_for_flush(inner).trim();
+    (!cleaned.is_empty()).then_some(cleaned)
+}
+
+/// Extracts a steered user instruction embedded inside a `ToolResult` (either raw text or JSON `error`).
+#[must_use]
+pub(crate) fn extract_interruption_from_tool_result(
+    tr: &rig::message::ToolResult,
+) -> Option<String> {
+    for part in &tr.content {
+        match part {
+            rig::message::ToolResultContent::Text(t) => {
+                if let Some(msg) = extract_interruption_user_text(&t.text) {
+                    return Some(msg.to_string());
+                }
+            }
+            rig::message::ToolResultContent::Json { value } => {
+                if let Some(err_str) = value.get("error").and_then(serde_json::Value::as_str)
+                    && let Some(msg) = extract_interruption_user_text(err_str)
+                {
+                    return Some(msg.to_string());
+                }
+            }
+            rig::message::ToolResultContent::Image(_) => {}
+        }
+    }
+    None
+}
+
+/// Extracts a `--- REFERENCED FILES (PRE-LOADED VIA @MENTION) --- ... --- END REFERENCED FILES ---`
+/// block from `section` so recent turns inside the 4-turn freshness window retain pre-loaded `@file` slices.
+#[must_use]
+fn extract_referenced_files_block(section: &str) -> Option<String> {
+    let header = super::file_refs::REFERENCED_FILES_HEADER;
+    let footer_line = format!("\n{}", super::file_refs::REFERENCED_FILES_FOOTER);
+    let start = section.find(header)?;
+    let after_header = start + header.len();
+    let rel_end = section[after_header..].find(&footer_line)?;
+    let end = after_header + rel_end + footer_line.len();
+    Some(format!("\n\n{}", section[start..end].trim()))
+}
 
 /// Returns `true` if `msg` is the start of a real user exchange (contains user text,
 /// is not a tool-result continuation, and is not a synthetic checkpoint/roundtable header).
@@ -100,33 +151,57 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
     for msg in evicted {
         match msg {
             Message::User { content } => {
-                for raw_text in content.iter().filter_map(rig::message::UserContent::as_text) {
-                    let trimmed = raw_text.trim();
-                    if let Some(rest) = trimmed.strip_prefix(SESSION_CHECKPOINT_PREFIX) {
-                        prior_checkpoint = rest.trim().to_string();
-                        continue;
-                    }
-                    let cleaned =
-                        crate::engine::summarization::history::clean_user_text_for_flush(trimmed)
+                for item in content {
+                    match item {
+                        rig::message::UserContent::Text(raw_text) => {
+                            let trimmed = raw_text.text.trim();
+                            if let Some(rest) = trimmed.strip_prefix(SESSION_CHECKPOINT_PREFIX) {
+                                prior_checkpoint = rest.trim().to_string();
+                                continue;
+                            }
+                            let cleaned = crate::engine::summarization::history::clean_user_text_for_flush(
+                                trimmed,
+                            )
                             .trim();
-                    if !cleaned.is_empty()
-                        && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
-                        && !cleaned.starts_with("[ROUNDTABLE TURN")
-                    {
-                        flush_entry(
-                            &mut entries,
-                            &mut current_user,
-                            &mut current_tools,
-                            &mut current_reply,
-                        );
-                        let one_line = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
-                        let end = one_line.floor_char_boundary(180);
-                        let snippet = if end < one_line.len() {
-                            format!("{}...", &one_line[..end])
-                        } else {
-                            one_line
-                        };
-                        current_user = Some(snippet);
+                            if !cleaned.is_empty()
+                                && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
+                                && !cleaned.starts_with("[ROUNDTABLE TURN")
+                            {
+                                flush_entry(
+                                    &mut entries,
+                                    &mut current_user,
+                                    &mut current_tools,
+                                    &mut current_reply,
+                                );
+                                let one_line = cleaned.split_whitespace().collect::<Vec<_>>().join(" ");
+                                let end = one_line.floor_char_boundary(180);
+                                let snippet = if end < one_line.len() {
+                                    format!("{}...", &one_line[..end])
+                                } else {
+                                    one_line
+                                };
+                                current_user = Some(snippet);
+                            }
+                        }
+                        rig::message::UserContent::ToolResult(tr) => {
+                            if let Some(steered) = extract_interruption_from_tool_result(tr) {
+                                flush_entry(
+                                    &mut entries,
+                                    &mut current_user,
+                                    &mut current_tools,
+                                    &mut current_reply,
+                                );
+                                let one_line = steered.split_whitespace().collect::<Vec<_>>().join(" ");
+                                let end = one_line.floor_char_boundary(180);
+                                let snippet = if end < one_line.len() {
+                                    format!("{}...", &one_line[..end])
+                                } else {
+                                    one_line
+                                };
+                                current_user = Some(snippet);
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }
@@ -359,28 +434,38 @@ pub fn prepare_settled_history_for_speaker(
                             .find("\n\n--- UPDATE CHANGELOG CONTEXT ---")
                             .or_else(|| text.text.find("\n\n## YOUR IDENTITY"))
                             .or_else(|| text.text.find("\n\n## CURRENT TURN CONTEXT"))
+                            .or_else(|| text.text.find("\n\n--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---"))
                             .or_else(|| text.text.find("\n\n--- GLOBAL RADAR"))
                             .or_else(|| text.text.find("\n\nTerminal Snapshot:\n```"));
 
                         if let Some(idx) = dyn_start {
                             if is_old {
-                                // Outside the 4-turn freshness window: strip all dynamic context and snapshots
+                                // Outside the 4-turn freshness window: strip all dynamic context,
+                                // pre-loaded `@file` slices, and snapshots.
                                 text.text.truncate(idx);
-                            } else if let Some(snap_idx) = text.text[idx..].find("\n\nTerminal Snapshot:\n```") {
-                                // Inside the 4-turn freshness window: strip redundant identity/memories/skills/radar
-                                // (which are already freshly injected in the current USER PROMPT), while keeping the
-                                // turn's Terminal Snapshot if it actually changed.
-                                let abs_snap_idx = idx + snap_idx;
-                                let snapshot_block = &text.text[abs_snap_idx..];
-                                if snapshot_block.contains("[TERMINAL_SNAPSHOT: NO_CHANGE]") {
-                                    text.text.truncate(idx);
-                                } else {
-                                    let snap_owned = snapshot_block.to_string();
-                                    text.text.truncate(idx);
-                                    text.text.push_str(&snap_owned);
-                                }
                             } else {
+                                // Inside the 4-turn freshness window: strip redundant identity/memories/skills/radar
+                                // (which are freshly injected in the current USER PROMPT), while keeping any `@file`
+                                // slices pre-loaded in those recent turns and any changed non-empty Terminal Snapshot.
+                                let tail_slice = &text.text[idx..];
+                                let kept_refs = extract_referenced_files_block(tail_slice);
+                                let kept_snap = tail_slice
+                                    .find("\n\nTerminal Snapshot:\n```")
+                                    .map(|rel| &tail_slice[rel..])
+                                    .filter(|snap_block| {
+                                        !snap_block.contains(super::snapshot::SNAPSHOT_NO_CHANGE_MARKER)
+                                            && !snap_block.contains(super::snapshot::SNAPSHOT_EMPTY_MARKER)
+                                            && snap_block.trim() != "Terminal Snapshot:\n```\n```"
+                                    })
+                                    .map(str::to_string);
+
                                 text.text.truncate(idx);
+                                if let Some(refs_block) = kept_refs {
+                                    text.text.push_str(&refs_block);
+                                }
+                                if let Some(snap_block) = kept_snap {
+                                    text.text.push_str(&snap_block);
+                                }
                             }
                         }
                     }
@@ -915,6 +1000,99 @@ mod tests {
             assert!(text.contains("file_write to `src/parser.rs`"));
         } else {
             panic!("Expected trailing synthetic Assistant bridge message");
+        }
+    }
+
+    #[test]
+    fn referenced_files_stay_in_4_turn_window_and_steered_interruptions_enter_checkpoint() {
+        let ref_block = format!(
+            "\n\n{}\nThe user attached files:\n\n### `@src/parser.rs` (`/workspace/src/parser.rs`)\n[Showing lines 1-2 of 2]\n```text\n1: fn version() -> u32 {{ 1 }}\n2: // --------------------------------------------------\n```\n{}",
+            super::super::file_refs::REFERENCED_FILES_HEADER,
+            super::super::file_refs::REFERENCED_FILES_FOOTER,
+        );
+
+        let turn1_old = format!(
+            "Explain @src/parser.rs\n\n## YOUR IDENTITY\nAgent Name: **niko**{ref_block}\n\nTerminal Snapshot:\n```\n{}\n```",
+            super::super::snapshot::SNAPSHOT_EMPTY_MARKER,
+        );
+        let turn5_recent = format!(
+            "Inspect @src/parser.rs again\n\n## YOUR IDENTITY\nAgent Name: **niko**{ref_block}\n\nTerminal Snapshot:\n```\n{}\n```",
+            super::super::snapshot::SNAPSHOT_EMPTY_MARKER,
+        );
+
+        let history = vec![
+            user(&turn1_old),
+            asst("Explained turn 1."),
+            user("Turn 2"),
+            asst("Reply 2"),
+            user("Turn 3"),
+            asst("Reply 3"),
+            user("Turn 4"),
+            asst("Reply 4"),
+            user(&turn5_recent),
+            asst("Explained turn 5."),
+            user("Turn 6 current"),
+        ];
+
+        let prepared = prepare_query_history(history, 0);
+
+        // Turn 1 (outside 4-turn window) strips `@src/parser.rs` preload AND empty snapshot
+        if let Message::User { content } = &prepared[0]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert_eq!(t.text, "Explain @src/parser.rs");
+        } else {
+            panic!("Expected stripped Turn 1 user message");
+        }
+
+        // Turn 5 (inside 4-turn window) retains `@src/parser.rs` (even with 50 dashes inside!)
+        // while stripping `## YOUR IDENTITY` and `[TERMINAL_SNAPSHOT: EMPTY]`
+        if let Message::User { content } = &prepared[8]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert!(t.text.starts_with("Inspect @src/parser.rs again"));
+            assert!(!t.text.contains("## YOUR IDENTITY"));
+            assert!(!t.text.contains("SNAPSHOT_EMPTY"));
+            assert!(t.text.contains("1: fn version() -> u32 { 1 }"));
+            assert!(t.text.contains("2: // --------------------------------------------------"));
+        } else {
+            panic!("Expected Turn 5 user message with retained @file block");
+        }
+
+        // Verify steered `[USER_INTERRUPTION]` inside a JSON `ToolResult` is preserved in `build_checkpoint_pair`
+        let steered_err = boxxy_core_toolbox::ApprovalOutcome::Interrupted(format!(
+            "Switch to @src/other.rs instead.{ref_block}"
+        ))
+        .rejection_message();
+        let steered_tool_res = Message::User {
+            content: vec![rig::message::UserContent::ToolResult(
+                rig::message::ToolResult {
+                    call: rig::message::ProviderCallId::new("call_steer").unwrap().into(),
+                    name: rig::message::ToolName::new("replace_in_file").unwrap(),
+                    content: vec![rig::message::ToolResultContent::Json {
+                        value: serde_json::json!({
+                            "success": false,
+                            "error": steered_err,
+                        }),
+                    }],
+                    is_error: false,
+                },
+            )],
+        };
+        let evicted = vec![
+            user("Update src/module.rs"),
+            tool_call_msg("call_steer", "replace_in_file", "src/module.rs"),
+            steered_tool_res,
+            asst("Updated src/other.rs instead."),
+        ];
+        let (chk_u, _) = build_checkpoint_pair(&evicted).expect("checkpoint");
+        if let Message::User { content } = &chk_u
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert!(t.text.contains("Switch to @src/other.rs instead."));
+            assert!(!t.text.contains("REFERENCED FILES"));
+        } else {
+            panic!("Expected steered user text in checkpoint");
         }
     }
 }

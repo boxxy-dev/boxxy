@@ -92,6 +92,9 @@ async fn cli_doctor_and_env_actions_succeed_against_isolated_config_dir() {
         parse_and_dispatch(
             [
                 "boxxy-terminal",
+                "--dev",
+                "--ephemeral",
+                "--instance=e2e",
                 "+doctor",
                 "--json",
                 "--config-dir",
@@ -111,6 +114,9 @@ async fn cli_doctor_and_env_actions_succeed_against_isolated_config_dir() {
         parse_and_dispatch(
             [
                 "boxxy-terminal",
+                "--dev",
+                "--ephemeral",
+                "--instance=e2e",
                 "+env",
                 "--config-dir",
                 &cfg_dir,
@@ -123,6 +129,10 @@ async fn cli_doctor_and_env_actions_succeed_against_isolated_config_dir() {
     assert!(
         matches!(env_outcome, ParseOutcome::Exit(code) if code == ExitCode::SUCCESS),
         "+env must exit with ExitCode::SUCCESS"
+    );
+    assert!(
+        boxxy_sys_utils::is_dev_instance() && boxxy_sys_utils::is_ephemeral_mode(),
+        "CLI +actions in E2E suite must keep isolated dev/ephemeral overrides intact"
     );
 
     ws.teardown().await;

@@ -938,7 +938,10 @@ pub async fn create_claw_agent(
     let mut final_preamble =
         load_prompt_fallback("/dev/boxxy/BoxxyTerminal/prompts/claw.md", "claw.md");
     // {{available_skills}} is now injected per-turn in the user message; strip the placeholder
-    final_preamble = final_preamble.replace("{{available_skills}}", "");
+    // along with its surrounding paragraph break so no quadruple blank line remains.
+    final_preamble = final_preamble
+        .replace("\n\n{{available_skills}}", "")
+        .replace("{{available_skills}}", "");
 
     if !config.preamble.is_empty() {
         final_preamble.push('\n');

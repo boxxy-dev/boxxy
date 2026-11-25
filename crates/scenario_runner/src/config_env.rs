@@ -11,7 +11,7 @@ use boxxy_preferences::Settings;
 use boxxy_sys_utils::CliDevOverrides;
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::LazyLock;
+use std::sync::{LazyLock, Once};
 use tempfile::TempDir;
 
 pub const MOCK_CLAW_MODEL_ID: &str = "mock-claw-model";
@@ -24,22 +24,37 @@ struct IsolatedProcessConfig {
 }
 
 static REVISION_SEQ: AtomicU64 = AtomicU64::new(1);
+static LOGGER_ONCE: Once = Once::new();
+
+pub fn init_test_logger() {
+    LOGGER_ONCE.call_once(|| {
+        let _ = env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
+            .filter_module("rig", log::LevelFilter::Error)
+            .filter_module("rig_core", log::LevelFilter::Error)
+            .try_init();
+    });
+}
+
+fn apply_dev_overrides_for_root(config_root: &Path) {
+    boxxy_sys_utils::configure_dev_options(CliDevOverrides {
+        dev: true,
+        instance: Some("e2e".to_string()),
+        ephemeral: true,
+        sync_settings: false,
+        config_dir: Some(config_root.to_path_buf()),
+        debug_context: boxxy_sys_utils::env::env_truthy("BOXXY_DEBUG_CONTEXT"),
+    });
+}
 
 static ISOLATED_CONFIG: LazyLock<IsolatedProcessConfig> = LazyLock::new(|| {
+    init_test_logger();
     let temp_dir = tempfile::Builder::new()
         .prefix("boxxy_e2e_cfg_")
         .tempdir()
         .expect("create isolated Boxxy config TempDir");
     let config_root = temp_dir.path().to_path_buf();
 
-    boxxy_sys_utils::configure_dev_options(CliDevOverrides {
-        dev: true,
-        instance: Some("e2e".to_string()),
-        ephemeral: true,
-        sync_settings: false,
-        config_dir: Some(config_root.clone()),
-        debug_context: false,
-    });
+    apply_dev_overrides_for_root(&config_root);
 
     Settings::init();
     Settings::update(|s| {
@@ -61,10 +76,14 @@ static ISOLATED_CONFIG: LazyLock<IsolatedProcessConfig> = LazyLock::new(|| {
     }
 });
 
-/// Bootstraps the process-scoped isolated Boxxy config root and returns its path.
+/// Bootstraps the process-scoped isolated Boxxy config root, restores isolated `CliDevOverrides`,
+/// and returns its path.
 #[must_use]
 pub fn ensure_isolated_config_root() -> &'static Path {
-    ISOLATED_CONFIG.config_root.as_path()
+    init_test_logger();
+    let root = ISOLATED_CONFIG.config_root.as_path();
+    apply_dev_overrides_for_root(root);
+    root
 }
 
 /// Returns the seeded bundled `CharacterInfo` catalog inside the isolated config root.
@@ -130,5 +149,6 @@ pub fn configure_mock_llm_endpoint(endpoint_name: &str, base_url: &str) {
         s.memory_model = Some(memory_provider.clone());
         s.character_models.clear();
         s.vibe_trusted_dirs.clear();
+        s.user_profile.display_name.clear();
     });
 }

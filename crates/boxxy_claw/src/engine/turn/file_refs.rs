@@ -2,6 +2,9 @@ use base64::Engine as _;
 use std::collections::HashSet;
 use std::path::Path;
 
+pub const REFERENCED_FILES_HEADER: &str = "--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---";
+pub const REFERENCED_FILES_FOOTER: &str = "--- END REFERENCED FILES ---";
+
 const DEFAULT_LINE_LIMIT: usize = 500;
 const MAX_LINE_LIMIT: usize = 1000;
 const MAX_SLICE_BYTES: usize = 64 * 1024;
@@ -12,22 +15,6 @@ const MAX_DIR_ENTRIES: usize = 250;
 const MAX_TEXT_FILE_BYTES: u64 = 5 * 1024 * 1024;
 const MAX_IMAGE_BYTES: u64 = 10 * 1024 * 1024;
 const MAX_STALE_CHECK_FILES: usize = 16;
-
-const BUILTIN_BLACKLIST: &[&str] = &[
-    "/etc/shadow",
-    "/etc/gshadow",
-    "/etc/sudoers",
-    "/root/.ssh",
-    ".ssh/id_rsa",
-    ".ssh/id_ed25519",
-    ".ssh/id_ed25519_sk",
-    ".ssh/id_ecdsa",
-    ".ssh/id_ecdsa_sk",
-    ".ssh/id_dsa",
-    ".ssh/authorized_keys",
-    ".gnupg/private-keys-v1.d",
-    ".aws/credentials",
-];
 
 #[derive(Debug, Default)]
 pub struct ResolvedFileRefs {
@@ -134,71 +121,6 @@ fn split_line_range(token: &str) -> (&str, Option<usize>, Option<usize>) {
     (token, None, None)
 }
 
-fn merge_blacklist_rules(custom_content: Option<&str>) -> Vec<String> {
-    let mut blacklisted: Vec<String> = BUILTIN_BLACKLIST.iter().map(|&s| s.to_string()).collect();
-    if let Some(content) = custom_content {
-        for rule in content
-            .lines()
-            .map(str::trim)
-            .filter(|l| !l.is_empty() && !l.starts_with('#'))
-        {
-            if !blacklisted.iter().any(|existing| existing == rule) {
-                blacklisted.push(rule.to_string());
-            }
-        }
-    }
-    blacklisted
-}
-
-fn load_blacklist() -> Vec<String> {
-    let blacklist_path = boxxy_sys_utils::get_config_dir()
-        .join("boxxyclaw")
-        .join("BLACKLIST.md");
-    let custom = std::fs::read_to_string(&blacklist_path).ok();
-    merge_blacklist_rules(custom.as_deref())
-}
-
-fn path_matches_blacklist_entry(candidate_path: &str, rule: &str) -> bool {
-    let rule = rule.trim().trim_end_matches('/');
-    if rule.is_empty() {
-        return false;
-    }
-    let cand = candidate_path.trim_end_matches('/');
-    if rule.starts_with('/') {
-        cand == rule
-            || cand
-                .strip_prefix(rule)
-                .is_some_and(|rest| rest.starts_with('/'))
-    } else {
-        if cand == rule
-            || cand
-                .strip_prefix(rule)
-                .is_some_and(|rest| rest.starts_with('/'))
-        {
-            return true;
-        }
-        if let Some(prefix) = cand.strip_suffix(rule)
-            && prefix.ends_with('/')
-        {
-            return true;
-        }
-        let mid_needle = format!("/{rule}/");
-        cand.contains(&mid_needle)
-    }
-}
-
-fn is_blacklisted(resolved_path: &str, path: &Path, blacklist: &[String]) -> bool {
-    let canonical = std::fs::canonicalize(path)
-        .ok()
-        .map(|p| p.to_string_lossy().into_owned());
-    blacklist.iter().any(|rule| {
-        path_matches_blacklist_entry(resolved_path, rule)
-            || canonical
-                .as_deref()
-                .is_some_and(|c| path_matches_blacklist_entry(c, rule))
-    })
-}
-
 fn is_supported_image(path: &str) -> bool {
     Path::new(path).extension().is_some_and(|ext| {
         ext.eq_ignore_ascii_case("png")
@@ -225,14 +147,14 @@ pub async fn resolve_prompt_file_refs(prompt: &str, cwd: &str) -> ResolvedFileRe
 
 fn resolve_tokens_sync(tokens: &[FileMentionToken], cwd: &str) -> ResolvedFileRefs {
     let mut out = ResolvedFileRefs::default();
-    let blacklist = load_blacklist();
+    let blacklist = boxxy_core_toolbox::blacklist::load_blacklist();
     let mut sections = Vec::new();
     let mut total_bytes_used = 0usize;
 
     for token in tokens {
         let resolved_path = boxxy_core_toolbox::utils::resolve_path(cwd, &token.path_str);
         let path = Path::new(&resolved_path);
-        if is_blacklisted(&resolved_path, path, &blacklist) {
+        if boxxy_core_toolbox::blacklist::is_path_blacklisted(path, &blacklist) {
             continue;
         }
 
@@ -297,10 +219,10 @@ fn resolve_tokens_sync(tokens: &[FileMentionToken], cwd: &str) -> ResolvedFileRe
 
     if !sections.is_empty() {
         out.context_block = format!(
-            "\n--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---\n\
+            "\n{REFERENCED_FILES_HEADER}\n\
             The user attached the following workspace file(s)/folder(s) with `@`. Their contents are already loaded below and registered for `replace_in_file` — do NOT call `file_read` on these line ranges again unless you need lines outside the shown window:\n\n\
             {}\n\
-            --------------------------------------------------\n",
+            {REFERENCED_FILES_FOOTER}\n",
             sections.join("\n\n")
         );
     }
@@ -555,11 +477,13 @@ mod tests {
         assert_eq!(resolved.read_hashes[0].0, file_path.to_string_lossy());
     }
 
-    #[test]
-    fn custom_blacklist_extends_builtin_and_blocks_symlinked_keys() {
-        let merged = merge_blacklist_rules(Some("# comment\nsecrets.toml\n"));
+    #[tokio::test]
+    async fn shared_blacklist_blocks_auth_tokens_codex_and_symlinked_keys_in_at_mentions() {
+        let merged =
+            boxxy_core_toolbox::blacklist::parse_blacklist_with_defaults(Some("# comment\nsecrets.toml\n"));
         assert!(merged.iter().any(|r| r == "/etc/shadow"));
         assert!(merged.iter().any(|r| r == ".ssh/id_ed25519"));
+        assert!(merged.iter().any(|r| r == ".codex/auth.json"));
         assert!(merged.iter().any(|r| r == "secrets.toml"));
 
         let tmp = tempfile::tempdir().unwrap();
@@ -568,16 +492,27 @@ mod tests {
         let secret_key = ssh_dir.join("id_ed25519");
         std::fs::write(&secret_key, "PRIVATE KEY DATA").unwrap();
 
+        let codex_dir = tmp.path().join(".codex");
+        std::fs::create_dir_all(&codex_dir).unwrap();
+        std::fs::write(codex_dir.join("auth.json"), "{\"access_token\":\"secret\"}").unwrap();
+
         let workspace = tmp.path().join("project");
         std::fs::create_dir_all(&workspace).unwrap();
         let link = workspace.join("innocent_note.txt");
         std::os::unix::fs::symlink(&secret_key, &link).unwrap();
 
-        assert!(is_blacklisted(
-            &link.to_string_lossy(),
-            &link,
-            &merged
+        assert!(boxxy_core_toolbox::blacklist::is_path_blacklisted(
+            &link, &merged
         ));
+
+        // Verify `resolve_prompt_file_refs` refuses to preload symlinked keys or `.codex/auth.json`
+        let resolved = resolve_prompt_file_refs(
+            "Inspect @innocent_note.txt and @../.codex/auth.json",
+            &workspace.to_string_lossy(),
+        )
+        .await;
+        assert_eq!(resolved.context_block, "");
+        assert_eq!(resolved.read_hashes, Vec::<(String, u64)>::new());
     }
 
     #[tokio::test]

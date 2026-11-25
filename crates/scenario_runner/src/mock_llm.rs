@@ -241,6 +241,53 @@ impl RecordedChatRequest {
         buf
     }
 
+    /// Returns concatenated text of all `system` / `developer` role messages in this request.
+    #[must_use]
+    pub fn system_prompt_text(&self) -> String {
+        let mut buf = String::new();
+        for msg in &self.messages {
+            let role = msg.get("role").and_then(Value::as_str).unwrap_or_default();
+            if role == "system" || role == "developer" {
+                if let Some(s) = msg.get("content").and_then(Value::as_str) {
+                    buf.push_str(s);
+                    buf.push('\n');
+                } else if let Some(arr) = msg.get("content").and_then(Value::as_array) {
+                    for part in arr {
+                        if let Some(t) = part.get("text").and_then(Value::as_str) {
+                            buf.push_str(t);
+                            buf.push('\n');
+                        }
+                    }
+                }
+            }
+        }
+        buf
+    }
+
+    /// Returns concatenated text of all non-system messages (`user`, `assistant`, `tool`) in this request.
+    #[must_use]
+    pub fn conversation_text(&self) -> String {
+        let mut buf = String::new();
+        for msg in &self.messages {
+            let role = msg.get("role").and_then(Value::as_str).unwrap_or_default();
+            if role == "system" || role == "developer" {
+                continue;
+            }
+            if let Some(s) = msg.get("content").and_then(Value::as_str) {
+                buf.push_str(s);
+                buf.push('\n');
+            } else if let Some(arr) = msg.get("content").and_then(Value::as_array) {
+                for part in arr {
+                    if let Some(t) = part.get("text").and_then(Value::as_str) {
+                        buf.push_str(t);
+                        buf.push('\n');
+                    }
+                }
+            }
+        }
+        buf
+    }
+
     /// Returns registered function tool names sent in `tools`.
     #[must_use]
     pub fn tool_names(&self) -> Vec<String> {

@@ -13,8 +13,11 @@ use crate::pty_driver::PtyShellSession;
 use anyhow::{Context, Result, anyhow};
 use boxxy_agent::claw::ClawSubsystem;
 use boxxy_agent::core::state::AgentState;
+use boxxy_claw::registry::workspace::global_workspace;
 use boxxy_claw_protocol::ClawEnvironment;
-use boxxy_claw_protocol::characters::{CharacterClaim, HolderKind};
+use boxxy_claw_protocol::characters::{
+    CharacterClaim, HolderKind, INCOGNITO_CHARACTER_ID, INCOGNITO_DISPLAY_NAME,
+};
 use boxxy_db::Db;
 use boxxy_preferences::Settings;
 use std::path::{Path, PathBuf};
@@ -40,7 +43,8 @@ impl TestWorkspace {
     /// # Errors
     /// Returns an error if starting the mock server, creating temp directories, or opening SQLite fails.
     pub async fn new() -> Result<Self> {
-        let _ = ensure_isolated_config_root();
+        let config_root = ensure_isolated_config_root();
+        global_workspace().await.reset_all().await;
 
         let llm = MockLlmServer::start().await?;
         let endpoint_name = format!("MockEndpoint-{}", Uuid::new_v4());
@@ -52,9 +56,7 @@ impl TestWorkspace {
             .context("create TestWorkspace TempDir")?;
 
         // Ensure custom BLACKLIST.md rules from an earlier test in the same binary do not carry over.
-        let blacklist_file = ensure_isolated_config_root()
-            .join("boxxyclaw")
-            .join("BLACKLIST.md");
+        let blacklist_file = config_root.join("boxxyclaw").join("BLACKLIST.md");
         let _ = tokio::fs::remove_file(&blacklist_file).await;
 
         let agent_state = AgentState::new();
@@ -180,6 +182,20 @@ impl TestWorkspace {
         .await)
     }
 
+    /// Spawns a headless `/incognito` (`Inco Gnito`) pane without claiming a regular character.
+    pub async fn spawn_incognito_pane(&self, pane_id: impl Into<String>) -> PaneDriver {
+        PaneDriver::spawn(
+            pane_id.into(),
+            Uuid::new_v4().to_string(),
+            INCOGNITO_CHARACTER_ID.to_string(),
+            INCOGNITO_DISPLAY_NAME.to_string(),
+            self.workspace_dir.path().to_path_buf(),
+            Arc::clone(&self.env),
+            self.companions.clone(),
+        )
+        .await
+    }
+
     /// Spawns a real Linux PTY + `/bin/bash` child wired to this workspace's `PtyRegistry`.
     ///
     /// # Errors
@@ -199,11 +215,13 @@ impl TestWorkspace {
         .await
     }
 
-    /// Cleans up companion panes, detached PTYs, and global claims at the end of a test.
+    /// Cleans up companion panes, detached PTYs, workspace radar state, and global claims at the end of a test.
     pub async fn teardown(&mut self) {
         self.companions.cleanup_all().await;
         self.agent_state.pty_registry.terminate_all().await;
+        global_workspace().await.reset_all().await;
         self.claims.clear();
         set_active_claims(Vec::new());
+        let _ = ensure_isolated_config_root();
     }
 }

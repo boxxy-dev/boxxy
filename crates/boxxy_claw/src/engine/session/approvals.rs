@@ -51,9 +51,10 @@ impl SessionState {
         self.pending_inject_command = false;
         let mut cancelled = false;
         if let Some(summary) = self.pending_proposal_summary.take() {
-            self.history.push(rig::message::Message::assistant(format!(
-                "[Proposed {summary} — rejected by the user]"
-            )));
+            let (spk_name, spk_cid) = self.effective_speaker();
+            let note = format!("[Proposed {summary} — rejected by the user]");
+            let tagged = crate::engine::turn::history::tag_assistant_text(&spk_cid, &spk_name, &note);
+            self.history.push(rig::message::Message::assistant(tagged));
             cancelled = true;
         }
         if let Some(reply) = self.pending_terminal_reply.take() {

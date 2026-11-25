@@ -1,8 +1,10 @@
 use crate::engine::dispatcher::extract_command_and_clean;
 
+pub const SNAPSHOT_EMPTY_MARKER: &str = "[TERMINAL_SNAPSHOT: EMPTY]";
+pub const SNAPSHOT_NO_CHANGE_MARKER: &str = "[TERMINAL_SNAPSHOT: NO_CHANGE]";
+
 pub fn process_snapshot(snapshot: &str, last_snapshot_hash: &mut Option<u64>) -> String {
     // 1. Snapshot Management: Only include if changed to save tokens
-    let mut final_snapshot = snapshot.to_string();
     let current_hash = {
         use std::collections::hash_map::DefaultHasher;
         use std::hash::{Hash, Hasher};
@@ -11,10 +13,18 @@ pub fn process_snapshot(snapshot: &str, last_snapshot_hash: &mut Option<u64>) ->
         hasher.finish()
     };
 
-    if let Some(prev_hash) = last_snapshot_hash
-        && *prev_hash == current_hash {
-            final_snapshot = "[TERMINAL_SNAPSHOT: NO_CHANGE]".to_string();
-        }
+    if snapshot.trim().is_empty() {
+        *last_snapshot_hash = Some(current_hash);
+        return SNAPSHOT_EMPTY_MARKER.to_string();
+    }
+
+    let final_snapshot = if let Some(prev_hash) = last_snapshot_hash
+        && *prev_hash == current_hash
+    {
+        SNAPSHOT_NO_CHANGE_MARKER.to_string()
+    } else {
+        snapshot.to_string()
+    };
     *last_snapshot_hash = Some(current_hash);
 
     // 2. Security/Noise: Strip passwords and clear-screen sequences

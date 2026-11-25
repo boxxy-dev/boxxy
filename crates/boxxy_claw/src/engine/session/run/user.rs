@@ -580,36 +580,65 @@ impl ClawSession {
                 // images were attached; otherwise cancel and start a fresh turn so the model
                 // receives the attached `UserContent::Image` blocks.
                 if allow_steering && image_attachments.is_empty() {
-                    let mut fulfilled = {
-                        let mut state_lock = self.state.lock().await;
-                        state_lock.drain_pending_with_interruption(&effective_query)
-                    };
-                    let outcome =
-                        boxxy_core_toolbox::ApprovalOutcome::Interrupted(effective_query.clone());
-                    if ctx
+                    let has_local_pending = self.state.lock().await.has_in_turn_approval();
+                    let has_remote_pending = ctx
                         .workspace
-                        .drain_pending_commands_for_source(&self.pane_id, outcome.rejection_message())
-                        .await
-                    {
-                        fulfilled = true;
-                    }
+                        .has_pending_commands_for_source(&self.pane_id)
+                        .await;
 
-                    if fulfilled {
-                        debug!(
-                            "Pane {} ({}): Fulfilled pending tool approval with user query: {effective_query}.",
-                            self.pane_id, self.name
-                        );
-                        ctx.workspace
-                            .update_pane_state(
-                                self.pane_id.clone(),
-                                Some(self.session_id.clone()),
-                                Some(self.name.clone()),
-                                ctx.current_dir.clone(),
-                                Some(effective_query),
-                                Some(snapshot),
+                    if has_local_pending || has_remote_pending {
+                        let user_steered =
+                            crate::engine::turn::extract_user_authored_prompt(&effective_query);
+                        let resolved_refs =
+                            crate::engine::turn::file_refs::resolve_prompt_file_refs(
+                                user_steered,
+                                &cwd,
                             )
                             .await;
-                        return;
+                        let steered_payload = if resolved_refs.context_block.trim().is_empty() {
+                            effective_query.clone()
+                        } else {
+                            format!("{effective_query}\n\n{}", resolved_refs.context_block.trim())
+                        };
+
+                        let mut fulfilled = {
+                            let mut state_lock = self.state.lock().await;
+                            state_lock.current_dir.clone_from(&cwd);
+                            for (path, hash) in &resolved_refs.read_hashes {
+                                state_lock.read_file_hashes.insert(path.clone(), *hash);
+                            }
+                            state_lock.drain_pending_with_interruption(&steered_payload)
+                        };
+                        let outcome =
+                            boxxy_core_toolbox::ApprovalOutcome::Interrupted(steered_payload);
+                        if ctx
+                            .workspace
+                            .drain_pending_commands_for_source(
+                                &self.pane_id,
+                                outcome.rejection_message(),
+                            )
+                            .await
+                        {
+                            fulfilled = true;
+                        }
+
+                        if fulfilled {
+                            debug!(
+                                "Pane {} ({}): Fulfilled pending tool approval with user query: {effective_query}.",
+                                self.pane_id, self.name
+                            );
+                            ctx.workspace
+                                .update_pane_state(
+                                    self.pane_id.clone(),
+                                    Some(self.session_id.clone()),
+                                    Some(self.name.clone()),
+                                    ctx.current_dir.clone(),
+                                    Some(effective_query),
+                                    Some(snapshot),
+                                )
+                                .await;
+                            return;
+                        }
                     }
                 }
 

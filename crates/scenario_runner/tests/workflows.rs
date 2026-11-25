@@ -5,10 +5,14 @@
 
 #[path = "workflows/companion_panes_and_vibe.rs"]
 mod companion_panes_and_vibe;
+#[path = "workflows/context_hygiene_and_compaction.rs"]
+mod context_hygiene_and_compaction;
 #[path = "workflows/edit_and_undo.rs"]
 mod edit_and_undo;
 #[path = "workflows/error_diagnosis.rs"]
 mod error_diagnosis;
+#[path = "workflows/incognito_and_roundtable.rs"]
+mod incognito_and_roundtable;
 #[path = "workflows/persistence_and_resume.rs"]
 mod persistence_and_resume;
 #[path = "workflows/pty_and_cli.rs"]

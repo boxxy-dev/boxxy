@@ -156,6 +156,14 @@ impl WorkspaceRegistry {
             .contains_key(target_pane_id)
     }
 
+    pub async fn has_pending_commands_for_source(&self, source_pane_id: &str) -> bool {
+        self.pending_commands
+            .read()
+            .await
+            .values()
+            .any(|(src_opt, _)| src_opt.as_deref() == Some(source_pane_id))
+    }
+
     pub async fn register_delegated_task(
         &self,
         request_id: uuid::Uuid,

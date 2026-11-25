@@ -107,9 +107,10 @@ impl ApprovalHandler for ClawApprovalHandler {
         {
             let mut state = self.state.lock().await;
             state.pending_file_reply = Some(tx);
-            let preview: String = content.chars().take(400).collect();
-            state.pending_proposal_summary =
-                Some(format!("file_write to `{path}`:\n```\n{preview}\n```"));
+            state.pending_proposal_summary = Some(format!(
+                "file edit on `{path}` (+{} / -{} lines)",
+                diff.stats.added_lines, diff.stats.removed_lines
+            ));
         }
 
         let event = ClawEngineEvent::ProposeFileWrite {

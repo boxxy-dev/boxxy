@@ -329,6 +329,14 @@ pub fn spawn_turn(
             );
         }
 
+        let home_pane_alias = workspace.get_pane_alias(&pane_id).await;
+        let claim_petname = boxxy_claw_protocol::characters::CLAIMS_CACHE
+            .load()
+            .iter()
+            .find(|c| c.holder_id == pane_id)
+            .map(|c| c.petname.clone())
+            .filter(|p| !p.trim().is_empty());
+
         // --- ATOMIC STATE SNAPSHOT ---
         // Lock state once to extract ALL needed fields and update history/hash.
         // CRITICAL: Do NOT call create_claw_agent while holding this lock!
@@ -445,10 +453,19 @@ pub fn spawn_turn(
             }
 
             let now = chrono::Local::now();
-            let identity = format!(
+            let mut identity = format!(
                 "Agent Name: **{}** (`@{}`)\nUnique ID: `{}`",
                 agent_name, speaker.slug, pane_id
             );
+            if let Some(ref alias) = home_pane_alias {
+                use std::fmt::Write as _;
+                let _ = write!(identity, "\nPane Alias: `{alias}`");
+            }
+            if let Some(ref petname) = claim_petname {
+                use std::fmt::Write as _;
+                let _ = write!(identity, "\nSwarm Petname: `{petname}`");
+            }
+
             let vibe_ctx = if state_lock.vibe_enabled {
                 if crate::engine::vibe_guard::is_cwd_vibe_trusted(
                     &cwd_clone,
@@ -462,35 +479,30 @@ pub fn spawn_turn(
                 "Vibe Mode: `OFF` (Supervised)"
             };
 
-            let turn_context = format!(
+            let mut turn_context = format!(
                 "## YOUR IDENTITY\n\
-                {}\n\
-                \n\
+                {identity}\n\n\
                 ## CURRENT TURN CONTEXT\n\
                 System Time: `{}`\n\
-                CWD: `{}`\n\
-                {}\n\
-                {}\n\
-                {}\n\
-                {}\n\
-                {}\n\
-                {}\n\
-                {}\n\
-                {}\n\
-                {}\n",
-                identity,
+                CWD: `{cwd_clone}`\n\
+                {vibe_ctx}",
                 now.to_rfc3339(),
-                cwd_clone,
-                vibe_ctx,
-                roundtable_context,
-                guest_home_context,
-                stale_files_notice,
-                resolved_file_refs.context_block,
-                skills_context,
-                past_memories,
-                radar,
-                tui_warning
             );
+            for optional_section in [
+                roundtable_context.trim(),
+                guest_home_context.trim(),
+                stale_files_notice.trim(),
+                resolved_file_refs.context_block.trim(),
+                skills_context.trim(),
+                past_memories.trim(),
+                radar.trim(),
+                tui_warning.trim(),
+            ] {
+                if !optional_section.is_empty() {
+                    turn_context.push_str("\n\n");
+                    turn_context.push_str(optional_section);
+                }
+            }
 
             let turn_tail = format!(
                 "\n\n{turn_context}\n\nTerminal Snapshot:\n```\n{final_snapshot_text}\n```"

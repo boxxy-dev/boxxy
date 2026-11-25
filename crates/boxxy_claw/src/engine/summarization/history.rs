@@ -48,18 +48,21 @@ pub(crate) fn clean_user_text_for_flush(raw: &str) -> &str {
     if raw.trim_start().starts_with("[ROUNDTABLE TURN") {
         return "";
     }
+    let mut end = raw.len();
     for marker in [
         "\n\n--- UPDATE CHANGELOG CONTEXT ---",
         "\n\n## YOUR IDENTITY",
         "\n\n## CURRENT TURN CONTEXT",
+        "\n\n--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---",
+        "\n--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---",
         "\n\n--- GLOBAL RADAR",
         "\n\nTerminal Snapshot:\n```",
     ] {
         if let Some(idx) = raw.find(marker) {
-            return &raw[..idx];
+            end = end.min(idx);
         }
     }
-    raw
+    &raw[..end]
 }
 
 pub async fn flush_history(
@@ -83,15 +86,29 @@ pub async fn flush_history(
                 let _ = writeln!(text_to_summarize, "SYSTEM: {content}");
             }
             Message::User { content } => {
-                for raw_text in content.iter().filter_map(rig::message::UserContent::as_text) {
-                    let cleaned = clean_user_text_for_flush(raw_text).trim();
-                    if !cleaned.is_empty()
-                        && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
-                        && !cleaned.starts_with(
-                            crate::engine::turn::history::SESSION_CHECKPOINT_PREFIX,
-                        )
-                    {
-                        let _ = writeln!(text_to_summarize, "USER: {cleaned}");
+                for part in &content {
+                    match part {
+                        rig::message::UserContent::Text(raw_text) => {
+                            let cleaned = clean_user_text_for_flush(&raw_text.text).trim();
+                            if !cleaned.is_empty()
+                                && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
+                                && !cleaned.starts_with(
+                                    crate::engine::turn::history::SESSION_CHECKPOINT_PREFIX,
+                                )
+                            {
+                                let _ = writeln!(text_to_summarize, "USER: {cleaned}");
+                            }
+                        }
+                        rig::message::UserContent::ToolResult(tr) => {
+                            if let Some(steered) =
+                                crate::engine::turn::history::extract_interruption_from_tool_result(
+                                    tr,
+                                )
+                            {
+                                let _ = writeln!(text_to_summarize, "USER: {steered}");
+                            }
+                        }
+                        _ => {}
                     }
                 }
             }

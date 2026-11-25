@@ -8,10 +8,7 @@ use std::time::Duration;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn"))
-        .filter_module("rig", log::LevelFilter::Error)
-        .filter_module("rig_core", log::LevelFilter::Error)
-        .init();
+    scenario_runner::config_env::init_test_logger();
 
     println!("Running Boxxy headless E2E smoke check (isolated config + MockLlmServer + PTY)...");
 

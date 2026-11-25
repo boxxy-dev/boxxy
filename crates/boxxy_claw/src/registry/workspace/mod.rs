@@ -571,6 +571,23 @@ impl WorkspaceRegistry {
         let mut global_intent = self.global_intent.write().await;
         *global_intent = Some(intent);
     }
+
+    /// Clears all volatile workspace panes, tasks, locks, subscriptions, pending commands,
+    /// delegated promises, global intent, and resets the alias counter (`pane-1`).
+    ///
+    /// Intended for isolated headless E2E test setup/teardown so panicking tests never leak
+    /// pane aliases or radar entries into subsequent test runs.
+    pub async fn reset_all(&self) {
+        self.panes.write().await.clear();
+        self.tasks.write().await.clear();
+        *self.global_intent.write().await = None;
+        self.subscriptions.write().await.clear();
+        self.locks.write().await.clear();
+        self.pending_commands.write().await.clear();
+        self.delegated_tasks.write().await.clear();
+        self.next_alias_index
+            .store(1, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 pub(super) fn normalize_lock_resource(resource: &str) -> String {
