@@ -3,6 +3,8 @@
 //! Consolidating domain workflow modules into a single integration test binary avoids linking
 //! separate multi-hundred-MB debug executables while keeping each workflow cleanly isolated.
 
+#[path = "workflows/command_lifecycle_and_continuity.rs"]
+mod command_lifecycle_and_continuity;
 #[path = "workflows/companion_panes_and_vibe.rs"]
 mod companion_panes_and_vibe;
 #[path = "workflows/context_hygiene_and_compaction.rs"]

@@ -389,6 +389,33 @@ impl ClawSession {
             .await;
     }
 
+    /// Updates `sessions.history_json` in SQLite when an already-persisted session mutates
+    /// `SessionState.history` locally (such as `/undo`, proposal rejection, or ghost-dismissal),
+    /// ensuring cross-pane `/resume` restores exact LLM history without creating phantom rows.
+    pub(super) async fn persist_history_if_present(&self) {
+        if self.incognito {
+            return;
+        }
+        let history_json_opt = {
+            let state_lock = self.state.lock().await;
+            if state_lock.is_headless || state_lock.history.is_empty() {
+                None
+            } else {
+                serde_json::to_string(&state_lock.history).ok()
+            }
+        };
+        let Some(history_json) = history_json_opt else {
+            return;
+        };
+        let db_opt = self.db.lock().await.clone();
+        if let Some(db) = db_opt {
+            let store = boxxy_db::store::Store::new(db.pool());
+            let _ = store
+                .update_session_history(&self.session_id, &history_json)
+                .await;
+        }
+    }
+
     pub(super) fn is_urgent_msg(msg: &ClawMessage) -> bool {
         if let ClawMessage::Transition(req) = msg
             && req.source == crate::engine::TriggerSource::User
@@ -405,6 +432,8 @@ impl ClawSession {
         matches!(
             msg,
             ClawMessage::Initialize
+                | ClawMessage::SettingsInvalidated
+                | ClawMessage::Reload
                 | ClawMessage::ToggleVibe(_)
                 | ClawMessage::ToggleWebSearch(_)
                 | ClawMessage::TogglePin(_)
@@ -561,5 +590,28 @@ mod tests {
             .await
             .expect("WakeSummaryComplete must bypass backlog while Dreamer task is active");
         assert!(matches!(wake_done, ClawMessage::WakeSummaryComplete { .. }));
+
+        // `SettingsInvalidated` must stay in FIFO order with `ClawQuery` inside `urgent_backlog`
+        // so a settings/model/character hot-swap is never overtaken by an immediately following query!
+        tx.send(ClawMessage::SettingsInvalidated).await.unwrap();
+        tx.send(ClawMessage::ClawQuery {
+            prompt_id: None,
+            query: "test after hot-swap".to_string(),
+            snapshot: String::new(),
+            cwd: "/workspace".to_string(),
+            image_attachments: Vec::new(),
+            image_attachment_meta: Vec::new(),
+        })
+        .await
+        .unwrap();
+        let first_urgent = ClawSession::get_next_msg(&rx, &mut urgent_backlog, &mut backlog, false)
+            .await
+            .expect("SettingsInvalidated must be yielded before subsequent ClawQuery");
+        assert!(matches!(first_urgent, ClawMessage::SettingsInvalidated));
+        let second_urgent =
+            ClawSession::get_next_msg(&rx, &mut urgent_backlog, &mut backlog, false)
+                .await
+                .expect("ClawQuery follows SettingsInvalidated");
+        assert!(matches!(second_urgent, ClawMessage::ClawQuery { .. }));
     }
 }

@@ -39,6 +39,7 @@ impl ClawSession {
             state_lock.roundtable.pause_for_interjection();
             state_lock.drain_pending_cancel();
         }
+        self.persist_history_if_present().await;
         let _ = ctx
             .workspace
             .drain_pending_commands_for_source(&self.pane_id, "[USER_EXPLICIT_REJECT]".to_string())

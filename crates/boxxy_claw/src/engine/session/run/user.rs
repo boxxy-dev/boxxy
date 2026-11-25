@@ -172,13 +172,16 @@ impl ClawSession {
                     }
                 }
             }
+            let (spk_name, spk_cid) = state_lock.effective_speaker();
+            let tagged_summary =
+                crate::engine::turn::history::tag_assistant_text(&spk_cid, &spk_name, &summary);
             state_lock.history.push(rig::message::Message::user(
                 "[System: The user ran /undo to revert file changes from the last turn.]"
                     .to_string(),
             ));
             state_lock
                 .history
-                .push(rig::message::Message::assistant(summary.clone()));
+                .push(rig::message::Message::assistant(tagged_summary));
         }
 
         Some(summary)
@@ -484,6 +487,7 @@ impl ClawSession {
         if !is_whats_new && display_query.trim().eq_ignore_ascii_case("/undo") {
             let _ = self.cancel_active_turn_and_proposals(ctx).await;
             if let Some(undo_msg) = self.try_handle_undo(&display_query, &ctx.env).await {
+                self.persist_history_if_present().await;
                 self.send_ui(ClawEngineEvent::SystemMessage { text: undo_msg })
                     .await;
             }

@@ -568,11 +568,18 @@ impl ClawSession {
                 }
             }
             ClawMessage::TerminalCommandAccepted { target_pane_id } => {
-                self.state.lock().await.terminal_command_accepted = true;
                 let effective_target = target_pane_id
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| self.pane_id.clone());
                 let is_remote = effective_target != self.pane_id;
+                {
+                    let mut state_lock = self.state.lock().await;
+                    state_lock.terminal_command_accepted = true;
+                    state_lock.pending_unaccepted_inject_cmd = None;
+                    if !is_remote {
+                        state_lock.pending_inject_command = true;
+                    }
+                }
                 let state = self.state.clone();
                 let workspace = ctx.workspace.clone();
                 let tx_ui = self.tx_ui.clone();

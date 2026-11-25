@@ -43,11 +43,9 @@ pub fn find_image_capable_characters_in_catalog(
                 boxxy_preferences::config::ModelConfigState::Ready(mp)
                     if mp.supports_image_generation() =>
                 {
-                    let display = if !c.config.display_name.trim().is_empty() {
-                        c.config.display_name.trim().to_string()
-                    } else {
-                        crate::engine::session::roundtable::format_character_title(&c.config.name)
-                    };
+                    let display =
+                        crate::engine::session::roundtable::speaker_from_info(c, "", "")
+                            .display_name;
                     Some((display, c.config.name.clone(), mp.provider_name().to_string()))
                 }
                 _ => None,

@@ -6,6 +6,21 @@ use crate::engine::{ClawEngineEvent, ClawEnvironment, ClawMessage, turn::spawn_t
 use super::ClawSession;
 
 impl ClawSession {
+    /// Checks whether an executed shell command matches an unaccepted `InjectCommand` preview
+    /// (`short_unaccepted_cmd` from `turn/mod.rs`, which truncates > 72-byte lines with `…`).
+    fn command_matches_proposed(executed_cmd: &str, proposed_short: &str) -> bool {
+        let exec_first = executed_cmd.lines().next().unwrap_or(executed_cmd).trim();
+        let prop_trimmed = proposed_short.trim();
+        if exec_first.is_empty() || prop_trimmed.is_empty() {
+            return false;
+        }
+        if let Some(prefix) = prop_trimmed.strip_suffix('…') {
+            exec_first.starts_with(prefix)
+        } else {
+            exec_first == prop_trimmed
+        }
+    }
+
     /// Returns `true` if a non-zero exit code represents a normal non-error outcome
     /// (such as `SIGINT`/`SIGQUIT` or `grep`/`rg`/`diff`/`test`/`[` returning 1).
     pub(super) fn should_ignore_exit_code(exit_code: i32, snapshot: &str) -> bool {
@@ -82,7 +97,44 @@ impl ClawSession {
 
         let mut state_lock = self.state.lock().await;
         state_lock.terminal_command_accepted = false;
-        state_lock.pending_unaccepted_inject_cmd = None;
+        let ghost_dismissed_proposal = if let Some(unaccepted) =
+            state_lock.pending_unaccepted_inject_cmd.take()
+        {
+            if Self::command_matches_proposed(&last_cmd, &unaccepted) {
+                false
+            } else {
+                // User never clicked "Accept & Run" and instead ran a different command manually
+                // in the terminal ("ghost dismiss" per State Machine Rule 3): record that the
+                // proposed command was skipped and do NOT misclassify user commands as agent-owned.
+                state_lock.pending_inject_command = false;
+                let note = format!("\n\n[Proposed command `{unaccepted}` — dismissed without running]");
+                let mut appended = false;
+                if let Some(rig::message::Message::Assistant(turn)) = state_lock.history.last_mut()
+                {
+                    for item in turn.content.iter_mut().rev() {
+                        if let rig::message::AssistantContent::Text(t) = item {
+                            t.text.push_str(&note);
+                            appended = true;
+                            break;
+                        }
+                    }
+                }
+                if !appended {
+                    let (spk_name, spk_cid) = state_lock.effective_speaker();
+                    let tagged = crate::engine::turn::history::tag_assistant_text(
+                        &spk_cid,
+                        &spk_name,
+                        note.trim_start(),
+                    );
+                    state_lock
+                        .history
+                        .push(rig::message::Message::assistant(tagged));
+                }
+                true
+            }
+        } else {
+            false
+        };
         if state_lock.status == crate::engine::AgentStatus::Sleep {
             let trimmed_cmd = last_cmd.trim();
             if !trimmed_cmd.is_empty() {
@@ -104,8 +156,16 @@ impl ClawSession {
                     "Command failed with exit code {exit_code}:\n{snapshot}"
                 )));
             }
+            drop(state_lock);
+            if ghost_dismissed_proposal {
+                self.persist_history_if_present().await;
+            }
         } else if Self::should_ignore_exit_code(exit_code, &snapshot) {
             state_lock.pending_inject_command = false;
+            drop(state_lock);
+            if ghost_dismissed_proposal {
+                self.persist_history_if_present().await;
+            }
         } else {
             let prompt = format!(
                 "The user's command failed with exit code {exit_code}. Please analyze the terminal snapshot and suggest a fix."
@@ -113,6 +173,10 @@ impl ClawSession {
 
             // Sleep mode gate — short-circuit before we decide anything else.
             if state_lock.status != crate::engine::AgentStatus::Waiting {
+                drop(state_lock);
+                if ghost_dismissed_proposal {
+                    self.persist_history_if_present().await;
+                }
                 return;
             }
 
@@ -122,6 +186,9 @@ impl ClawSession {
             if !agent_originated {
                 state_lock.pending_lazy_diagnosis = Some((prompt, snapshot, cwd));
                 drop(state_lock);
+                if ghost_dismissed_proposal {
+                    self.persist_history_if_present().await;
+                }
                 let character_id = self.character_id.clone();
                 let _ = self
                     .tx_ui
@@ -135,6 +202,9 @@ impl ClawSession {
             }
 
             drop(state_lock);
+            if ghost_dismissed_proposal {
+                self.persist_history_if_present().await;
+            }
             if current_turn.is_some() {
                 backlog.push_back(ClawMessage::CommandFinished {
                     exit_code,

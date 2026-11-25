@@ -409,6 +409,19 @@ impl Store<'_> {
             .await?;
         Ok(())
     }
+
+    /// Updates `history_json` for an already-persisted session (such as after `/undo` or an
+    /// explicit proposal rejection) without creating a phantom row or overwriting `title`.
+    pub async fn update_session_history(&self, session_id: &str, history_json: &str) -> Result<()> {
+        sqlx::query(
+            "UPDATE sessions SET history_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+        )
+        .bind(history_json)
+        .bind(session_id)
+        .execute(self.pool)
+        .await?;
+        Ok(())
+    }
 }
 
 fn prettify_character_label(raw: &str) -> String {
@@ -672,6 +685,22 @@ mod tests {
         assert_eq!(s2.total_tokens, 350);
         assert_eq!(s2.context_tokens, 20);
         assert!((s2.total_cost_usd - 0.04).abs() < 1e-9);
+
+        // `update_session_history` updates `history_json` in-place while preserving `title` and
+        // never inserting a phantom row for a non-existent session ID.
+        store
+            .update_session_history("sess_nonexistent", "[{\"role\":\"user\"}]")
+            .await
+            .unwrap();
+        assert!(store.get_session("sess_nonexistent").await.unwrap().is_none());
+
+        store
+            .update_session_history("sess_pin_2", "[{\"role\":\"user\"}]")
+            .await
+            .unwrap();
+        let s2_hist = store.get_session("sess_pin_2").await.unwrap().unwrap();
+        assert_eq!(s2_hist.history_json.as_deref(), Some("[{\"role\":\"user\"}]"));
+        assert_eq!(s2_hist.title.as_deref(), Some("Second Session"));
     }
 
     #[tokio::test]

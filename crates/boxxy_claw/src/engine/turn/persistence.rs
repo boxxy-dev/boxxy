@@ -142,36 +142,40 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     let db_val = ctx.db.lock().await.clone();
 
     if let Some(db_for_persistence) = db_val {
+        let store = boxxy_db::store::Store::new(db_for_persistence.pool());
+        // Commit `upsert_session_state` synchronously inside `perform_persistence` (which already
+        // executes on `spawn_turn`'s background task) so `sessions.history_json` and token counters
+        // are durably committed before `DiagnosisComplete` / `InjectCommand` / `TurnFinished` fires —
+        // preventing write-ordering races with immediate `/undo`, `CancelPending`, or `/resume`.
+        let _ = store
+            .upsert_session_state(
+                &session_id_for_db,
+                &agent_name_for_db,
+                &character_id_for_db,
+                &character_display_name_for_db,
+                "", // title is updated separately once generated
+                &history_json,
+                &pending_tasks_json,
+                &agent_name_for_db,
+                &cwd_for_db,
+                &model_id,
+                pinned_for_db,
+                total_tokens_for_db,
+                context_tokens_for_db,
+                total_cost_for_db,
+            )
+            .await;
+
+        if !should_attempt_title {
+            return;
+        }
+
         let state_for_title = state;
         let settings_clone = ctx.settings;
 
-        // Run session upsert FIRST and then conditionally generate the session title
-        // inside the same task so `UPDATE sessions SET title = ?` never races ahead of `INSERT`.
+        // Spawn ONLY the slow Turn-1 title LLM call in the background so UI turn completion stays instant.
         tokio::spawn(async move {
             let store = boxxy_db::store::Store::new(db_for_persistence.pool());
-            let _ = store
-                .upsert_session_state(
-                    &session_id_for_db,
-                    &agent_name_for_db,
-                    &character_id_for_db,
-                    &character_display_name_for_db,
-                    "", // title is updated separately once generated
-                    &history_json,
-                    &pending_tasks_json,
-                    &agent_name_for_db,
-                    &cwd_for_db,
-                    &model_id,
-                    pinned_for_db,
-                    total_tokens_for_db,
-                    context_tokens_for_db,
-                    total_cost_for_db,
-                )
-                .await;
-
-            if !should_attempt_title {
-                return;
-            }
-
             let needs_title = match store.get_session(&session_id_for_db).await {
                 Ok(Some(s)) => s.title.as_deref().unwrap_or("").trim().is_empty(),
                 _ => false,

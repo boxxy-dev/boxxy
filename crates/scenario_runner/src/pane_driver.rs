@@ -490,14 +490,17 @@ impl PaneDriver {
         .await
     }
 
-    /// Cleanly deactivates the session and removes the pane from `WorkspaceRegistry`.
+    /// Cleanly stops the session actor and collector tasks and removes the pane from `WorkspaceRegistry`.
+    ///
+    /// Aborts `actor_task` before teardown so end-of-test cleanup never spawns detached
+    /// `Deactivate` memory-flush requests against a closing `MockLlmServer` (tests verifying
+    /// `Deactivate` lifecycle flushes send `ClawMessage::Deactivate` explicitly before `shutdown()`).
     pub async fn shutdown(&mut self) {
-        let _ = self.tx.send(ClawMessage::Deactivate).await;
+        self.actor_task.abort();
+        self.collector_task.abort();
         let ws = global_workspace().await;
         ws.release_all_locks(&self.pane_id).await;
         ws.unregister_pane(self.pane_id.clone()).await;
-        self.actor_task.abort();
-        self.collector_task.abort();
     }
 }
 

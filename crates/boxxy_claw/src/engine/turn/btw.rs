@@ -73,6 +73,7 @@ async fn run_btw_query(params: BtwQueryParams) {
         settled_history,
         last_snapshot_hash,
         pending_proposal_summary,
+        pending_unaccepted_inject_cmd,
         recent_trace,
         cached_claw_agent,
         mcp_handle,
@@ -112,6 +113,7 @@ async fn run_btw_query(params: BtwQueryParams) {
             state_lock.history.clone(),
             state_lock.last_snapshot_hash,
             state_lock.pending_proposal_summary.clone(),
+            state_lock.pending_unaccepted_inject_cmd.clone(),
             state_lock.current_turn_trace.clone(),
             state_lock.persistent_agent.clone(),
             state_lock.mcp_handle.clone(),
@@ -342,6 +344,12 @@ async fn run_btw_query(params: BtwQueryParams) {
                 // include the live CWD and any changed terminal snapshot in the trailing question
                 // so `system + tools + btw_history` still gets a 100% warm KV prefix-cache hit!
                 if in_flight.messages.is_none() {
+                    if let Some(ref pending_cmd) = pending_unaccepted_inject_cmd {
+                        let _ = write!(
+                            btw_tail,
+                            "\n\n[Pending Command Proposal Awaiting User Approval: `{pending_cmd}` (not yet executed)]"
+                        );
+                    }
                     if !effective_cwd.is_empty() {
                         let _ = write!(btw_tail, "\n\nCWD: `{effective_cwd}`");
                     }

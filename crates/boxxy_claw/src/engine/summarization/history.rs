@@ -66,7 +66,7 @@ pub(crate) fn clean_user_text_for_flush(raw: &str) -> &str {
             end = end.min(idx);
         }
     }
-    &raw[..end]
+    crate::engine::turn::extract_user_authored_prompt(&raw[..end])
 }
 
 pub async fn flush_history(
@@ -296,6 +296,12 @@ mod tests {
 
         let plain = "just a normal user prompt";
         assert_eq!(clean_user_text_for_flush(plain), plain);
+
+        let debate = "[ROUNDTABLE DEBATE STARTED]\nTopic: Rust vs C++\nKick off the discussion in your character's voice!";
+        assert_eq!(clean_user_text_for_flush(debate), "Rust vs C++");
+
+        let drama = "[VISUAL NOVEL DRAMA MODE STARTED]\nTopic: Spaces vs tabs\nReply in ONLY 1 to 2 short, expressive spoken sentences!";
+        assert_eq!(clean_user_text_for_flush(drama), "Spaces vs tabs");
     }
 
     #[tokio::test]

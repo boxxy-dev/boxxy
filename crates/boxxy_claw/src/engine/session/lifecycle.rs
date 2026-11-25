@@ -50,6 +50,9 @@ impl ClawSession {
         }
         let unflushed: Vec<Message> = {
             let mut state_lock = self.state.lock().await;
+            if state_lock.is_headless {
+                return;
+            }
             let items: Vec<Message> = state_lock
                 .history
                 .iter()
@@ -397,6 +400,12 @@ impl ClawSession {
             let mut state_lock = self.state.lock().await;
             if character_changed {
                 if character_id_switched {
+                    let old_canonical = crate::engine::session::roundtable::resolve_host_speaker(
+                        &old_char_id,
+                        &old_char_name,
+                        &catalog,
+                    )
+                    .display_name;
                     for msg in &mut state_lock.history {
                         if let Message::Assistant(turn) = msg {
                             for item in &mut turn.content {
@@ -406,7 +415,7 @@ impl ClawSession {
                                 {
                                     t.text = crate::engine::turn::history::tag_assistant_text(
                                         &old_char_id,
-                                        &old_char_name,
+                                        &old_canonical,
                                         &t.text,
                                     );
                                 }

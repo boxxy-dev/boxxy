@@ -69,6 +69,15 @@ async fn main() -> Result<()> {
         ws.read_file("src/parser.rs").await?.contains("    1"),
         "expected /undo to restore original contents (got message: {undo_msg})"
     );
+    let persisted = boxxy_db::store::Store::new(ws.db.pool())
+        .get_session(pane.session_id())
+        .await?
+        .and_then(|s| s.history_json)
+        .unwrap_or_default();
+    ensure!(
+        persisted.contains("ran /undo to revert file changes"),
+        "expected /undo exchange to persist in sessions.history_json"
+    );
 
     // Verify real Linux PTY + Bash shell integration round-trip.
     let pty = ws.spawn_pty_bash("smoke-pty-1", ":1.smoke").await?;
