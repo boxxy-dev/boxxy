@@ -1,8 +1,8 @@
 use crate::core::state::AgentState;
+use crate::ipc::claw::AgentClawError;
 use boxxy_claw_protocol::{ClawEnvironment, ProcessSample};
 use std::process::Stdio;
 use tokio::process::Command;
-use zbus::fdo;
 use zbus::interface;
 
 mod fs_ops;
@@ -273,71 +273,80 @@ impl ClawEnvironment for ClawSubsystem {
 
 #[interface(name = "dev.boxxy.BoxxyTerminal.Agent.Claw")]
 impl ClawSubsystem {
-    async fn exec_shell(&self, command: String) -> fdo::Result<(i32, String, String)> {
+    async fn exec_shell(&self, command: String) -> Result<(i32, String, String), AgentClawError> {
         ClawEnvironment::exec_shell(self, command)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 
-    async fn spawn_detached(&self, command: String, cwd: String) -> fdo::Result<u32> {
+    async fn spawn_detached(&self, command: String, cwd: String) -> Result<u32, AgentClawError> {
         ClawEnvironment::spawn_detached(self, command, cwd)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 
-    async fn read_file(&self, path: String, start_line: u32, end_line: u32) -> fdo::Result<String> {
+    async fn read_file(
+        &self,
+        path: String,
+        start_line: u32,
+        end_line: u32,
+    ) -> Result<String, AgentClawError> {
         ClawEnvironment::read_file(self, path, start_line, end_line)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 
-    async fn write_file(&self, path: String, content: String) -> fdo::Result<()> {
+    async fn write_file(&self, path: String, content: String) -> Result<(), AgentClawError> {
         ClawEnvironment::write_file(self, path, content)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 
-    async fn list_directory(&self, path: String) -> fdo::Result<Vec<(String, bool, u64)>> {
+    async fn list_directory(
+        &self,
+        path: String,
+    ) -> Result<Vec<(String, bool, u64)>, AgentClawError> {
         ClawEnvironment::list_directory(self, path)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 
-    async fn delete_file(&self, path: String) -> fdo::Result<()> {
+    async fn delete_file(&self, path: String) -> Result<(), AgentClawError> {
         ClawEnvironment::delete_file(self, path)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 
-    async fn get_system_info(&self) -> fdo::Result<String> {
+    async fn get_system_info(&self) -> Result<String, AgentClawError> {
         ClawEnvironment::get_system_info(self)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 
-    async fn list_processes(&self) -> fdo::Result<String> {
+    async fn list_processes(&self) -> Result<String, AgentClawError> {
         let processes = ClawEnvironment::list_processes(self)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))?;
-        serde_json::to_string(&processes).map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)?;
+        serde_json::to_string(&processes)
+            .map_err(|e| AgentClawError::ExecutionFailed(e.to_string()))
     }
 
-    async fn kill_process(&self, pid: u32, signal: i32) -> fdo::Result<()> {
+    async fn kill_process(&self, pid: u32, signal: i32) -> Result<(), AgentClawError> {
         ClawEnvironment::kill_process(self, pid, signal)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 
-    async fn get_clipboard(&self) -> fdo::Result<String> {
+    async fn get_clipboard(&self) -> Result<String, AgentClawError> {
         ClawEnvironment::get_clipboard(self)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 
-    async fn set_clipboard(&self, text: String) -> fdo::Result<()> {
+    async fn set_clipboard(&self, text: String) -> Result<(), AgentClawError> {
         ClawEnvironment::set_clipboard(self, text)
             .await
-            .map_err(|e| fdo::Error::Failed(e.to_string()))
+            .map_err(AgentClawError::from_anyhow)
     }
 }
 

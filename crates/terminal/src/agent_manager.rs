@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use boxxy_agent::ipc::AgentProxy;
-use boxxy_agent::ipc::claw::AgentClawProxy;
+use boxxy_agent::ipc::claw::{AgentClawError, AgentClawProxy};
 use boxxy_agent::ipc::maintenance::AgentMaintenanceProxy;
 use boxxy_agent::ipc::pty::{AgentPtyProxy, DetachedSessionInfo, SpawnOptions};
 use boxxy_claw_protocol::{ClawEngineEvent, ClawEnvironment, ClawMessage};
@@ -270,6 +270,7 @@ pub struct AgentConnection {
 
 impl AgentConnection {
     fn spawn_supervisors(
+        conn: Connection,
         agent_proxy: AgentProxy<'static>,
         pty_proxy: AgentPtyProxy<'static>,
     ) -> Self {
@@ -279,10 +280,14 @@ impl AgentConnection {
 
         // 1. Character Claims & Catalog Cache Supervisor
         {
+            let conn = conn.clone();
             let proxy = agent_proxy.clone();
             tokio::spawn(async move {
                 let mut last_seen_revision = 0u64;
                 loop {
+                    if conn.is_closed() {
+                        break;
+                    }
                     if let Ok(mut stream) = proxy.receive_claims_changed().await {
                         while let Some(msg) = stream.next().await {
                             if let Ok(args) = msg.args()
@@ -300,6 +305,9 @@ impl AgentConnection {
                                 );
                             }
                         }
+                    }
+                    if conn.is_closed() {
+                        break;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     // Reconcile snapshot on stream reconnect
@@ -335,9 +343,13 @@ impl AgentConnection {
 
         // 2. External Companion Restore Request Supervisor
         {
+            let conn = conn.clone();
             let proxy = agent_proxy.clone();
             tokio::spawn(async move {
                 loop {
+                    if conn.is_closed() {
+                        break;
+                    }
                     if let Ok(mut stream) = proxy.receive_restore_detached_requested().await {
                         while let Some(msg) = stream.next().await {
                             if let Ok(args) = msg.args() {
@@ -352,6 +364,9 @@ impl AgentConnection {
                             }
                         }
                     }
+                    if conn.is_closed() {
+                        break;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
             });
@@ -359,9 +374,13 @@ impl AgentConnection {
 
         // 2b. External Companion Spawn Character Supervisor
         {
+            let conn = conn.clone();
             let proxy = agent_proxy.clone();
             tokio::spawn(async move {
                 loop {
+                    if conn.is_closed() {
+                        break;
+                    }
                     if let Ok(mut stream) = proxy.receive_spawn_character_requested().await {
                         while let Some(msg) = stream.next().await {
                             if let Ok(args) = msg.args() {
@@ -376,6 +395,9 @@ impl AgentConnection {
                             }
                         }
                     }
+                    if conn.is_closed() {
+                        break;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
             });
@@ -383,9 +405,13 @@ impl AgentConnection {
 
         // 2c. MCP Server Status Supervisor
         {
+            let conn = conn.clone();
             let proxy = agent_proxy.clone();
             tokio::spawn(async move {
                 loop {
+                    if conn.is_closed() {
+                        break;
+                    }
                     if let Ok(mut stream) = proxy.receive_mcp_status_changed().await {
                         while let Some(msg) = stream.next().await {
                             if let Ok(args) = msg.args()
@@ -396,6 +422,9 @@ impl AgentConnection {
                             }
                         }
                     }
+                    if conn.is_closed() {
+                        break;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
             });
@@ -403,10 +432,14 @@ impl AgentConnection {
 
         // 2d. Detached PTY Sessions Supervisor (eliminates idle D-Bus polling in AppWindow)
         {
+            let conn = conn.clone();
             let proxy = agent_proxy.clone();
             let pty_for_reconcile = pty_proxy.clone();
             tokio::spawn(async move {
                 loop {
+                    if conn.is_closed() {
+                        break;
+                    }
                     if let Ok(mut stream) = proxy.receive_detached_sessions_changed().await {
                         while let Some(msg) = stream.next().await {
                             if let Ok(args) = msg.args()
@@ -425,6 +458,9 @@ impl AgentConnection {
                             }
                         }
                     }
+                    if conn.is_closed() {
+                        break;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     let reconciled = pty_for_reconcile
                         .list_detached_sessions_detailed()
@@ -440,10 +476,14 @@ impl AgentConnection {
 
         // 3. Claw Session Event Multiplexer
         {
+            let conn = conn.clone();
             let proxy = agent_proxy;
             let router = claw_router.clone();
             tokio::spawn(async move {
                 loop {
+                    if conn.is_closed() {
+                        break;
+                    }
                     if let Ok(mut stream) = proxy.receive_claw_event().await {
                         while let Some(msg) = stream.next().await {
                             if let Ok(args) = msg.args()
@@ -454,6 +494,9 @@ impl AgentConnection {
                             }
                         }
                     }
+                    if conn.is_closed() {
+                        break;
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
             });
@@ -461,11 +504,15 @@ impl AgentConnection {
 
         // 4. PTY Process Exit Multiplexer + Reconnect State Reconciler
         {
+            let conn = conn.clone();
             let proxy = pty_proxy.clone();
             let exit_router = exited_router.clone();
             let fg_cleanup = fg_router.clone();
             tokio::spawn(async move {
                 loop {
+                    if conn.is_closed() {
+                        break;
+                    }
                     if let Ok(mut stream) = proxy.receive_exited().await {
                         while let Some(signal) = stream.next().await {
                             if let Ok(args) = signal.args() {
@@ -473,6 +520,9 @@ impl AgentConnection {
                                 exit_router.dispatch_once(&args.pid, args.exit_code);
                             }
                         }
+                    }
+                    if conn.is_closed() {
+                        break;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                     // Reconcile any processes that exited while the stream was reconnecting
@@ -492,12 +542,18 @@ impl AgentConnection {
             let router = fg_router.clone();
             tokio::spawn(async move {
                 loop {
+                    if conn.is_closed() {
+                        break;
+                    }
                     if let Ok(mut stream) = proxy.receive_foreground_process_changed().await {
                         while let Some(signal) = stream.next().await {
                             if let Ok(args) = signal.args() {
                                 router.dispatch(&args.pid, args.process_name.to_string());
                             }
                         }
+                    }
+                    if conn.is_closed() {
+                        break;
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(250)).await;
                 }
@@ -514,6 +570,7 @@ impl AgentConnection {
 
 #[derive(Clone)]
 pub struct AgentManager {
+    conn: Connection,
     agent_proxy: AgentProxy<'static>,
     proxy: AgentPtyProxy<'static>,
     claw_proxy: AgentClawProxy<'static>,
@@ -536,12 +593,16 @@ impl AgentManager {
         )
         .context("Failed to create Agent D-Bus proxies on Session Bus")?;
 
-        let connection = AgentConnection::spawn_supervisors(agent_proxy.clone(), proxy.clone());
+        let connection =
+            AgentConnection::spawn_supervisors(conn.clone(), agent_proxy.clone(), proxy.clone());
 
         // Wait for the agent to claim its D-Bus name and respond if it is still starting up.
         let mut attempts = 0;
         let max_attempts = 120; // 3 seconds total (25ms intervals)
         let startup_token_json = loop {
+            if conn.is_closed() {
+                break String::new();
+            }
             match agent_proxy.claim_startup_token().await {
                 Ok(json) => break json,
                 Err(e) => {
@@ -579,6 +640,7 @@ impl AgentManager {
         }
 
         Ok(Self {
+            conn,
             agent_proxy,
             proxy,
             claw_proxy,
@@ -746,6 +808,9 @@ impl AgentManager {
     }
 
     pub async fn is_daemon_alive(&self) -> bool {
+        if self.conn.is_closed() {
+            return false;
+        }
         tokio::time::timeout(
             std::time::Duration::from_millis(250),
             self.agent_proxy.get_version(),
@@ -1064,55 +1129,60 @@ impl DbusClawEnvironment {
     }
 }
 
+fn map_claw_dbus_err(err: zbus::Error, op: &'static str) -> anyhow::Error {
+    let msg = AgentClawError::from(err).into_message();
+    anyhow::anyhow!("{msg}").context(op)
+}
+
 #[async_trait::async_trait]
 impl ClawEnvironment for DbusClawEnvironment {
     async fn exec_shell(&self, command: String) -> Result<(i32, String, String)> {
         self.proxy
             .exec_shell(command)
             .await
-            .context("D-Bus exec_shell failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus exec_shell failed"))
     }
 
     async fn spawn_detached(&self, command: String, cwd: String) -> Result<u32> {
         self.proxy
             .spawn_detached(command, cwd)
             .await
-            .context("D-Bus spawn_detached failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus spawn_detached failed"))
     }
 
     async fn read_file(&self, path: String, start_line: u32, end_line: u32) -> Result<String> {
         self.proxy
             .read_file(path, start_line, end_line)
             .await
-            .context("D-Bus read_file failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus read_file failed"))
     }
 
     async fn write_file(&self, path: String, content: String) -> Result<()> {
         self.proxy
             .write_file(path, content)
             .await
-            .context("D-Bus write_file failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus write_file failed"))
     }
 
     async fn list_directory(&self, path: String) -> Result<Vec<(String, bool, u64)>> {
         self.proxy
             .list_directory(path)
             .await
-            .context("D-Bus list_directory failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus list_directory failed"))
     }
 
     async fn delete_file(&self, path: String) -> Result<()> {
         self.proxy
             .delete_file(path)
             .await
-            .context("D-Bus delete_file failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus delete_file failed"))
     }
 
     async fn get_system_info(&self) -> Result<String> {
         self.proxy
             .get_system_info()
             .await
-            .context("D-Bus get_system_info failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus get_system_info failed"))
     }
 
     async fn list_processes(&self) -> Result<Vec<boxxy_claw_protocol::ProcessSample>> {
@@ -1120,7 +1190,7 @@ impl ClawEnvironment for DbusClawEnvironment {
             .proxy
             .list_processes()
             .await
-            .context("D-Bus list_processes failed")?;
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus list_processes failed"))?;
         serde_json::from_str(&json).context("Failed to deserialize list_processes payload")
     }
 
@@ -1128,21 +1198,21 @@ impl ClawEnvironment for DbusClawEnvironment {
         self.proxy
             .kill_process(pid, signal)
             .await
-            .context("D-Bus kill_process failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus kill_process failed"))
     }
 
     async fn get_clipboard(&self) -> Result<String> {
         self.proxy
             .get_clipboard()
             .await
-            .context("D-Bus get_clipboard failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus get_clipboard failed"))
     }
 
     async fn set_clipboard(&self, text: String) -> Result<()> {
         self.proxy
             .set_clipboard(text)
             .await
-            .context("D-Bus set_clipboard failed")
+            .map_err(|e| map_claw_dbus_err(e, "D-Bus set_clipboard failed"))
     }
 }
 

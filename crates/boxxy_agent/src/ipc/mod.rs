@@ -15,9 +15,59 @@ pub(crate) use broadcasters::{emit_mcp_status_changed, emit_pending_tasks_change
 
 use crate::daemon::DaemonCore;
 use anyhow::Result;
+use futures_util::StreamExt;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{Mutex, watch};
 use zbus::{Connection, connection::Builder};
+
+/// Default method timeout for short-lived daemon control/status D-Bus connections
+/// (`+doctor`, `+agent`, `singleton`, and `agent_deployer`) so a wedged process
+/// never blocks startup or CLI inspection for the 25-second bus timeout.
+pub const CONTROL_METHOD_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Opens a session D-Bus connection bounded by [`CONTROL_METHOD_TIMEOUT`].
+pub async fn connect_control_session() -> zbus::Result<Connection> {
+    Builder::session()
+        .method_timeout(CONTROL_METHOD_TIMEOUT)
+        .build()
+        .await
+}
+
+/// Returns `true` when `err` indicates that no service currently owns the target
+/// bus name or object path (`ServiceUnknown`, `NameHasNoOwner`, `UnknownObject`).
+pub fn is_service_unavailable(err: &zbus::Error) -> bool {
+    matches!(
+        err,
+        zbus::Error::FDO(fdo_err)
+            if matches!(
+                fdo_err.as_ref(),
+                zbus::fdo::Error::ServiceUnknown(_)
+                    | zbus::fdo::Error::NameHasNoOwner(_)
+                    | zbus::fdo::Error::UnknownObject(_)
+            )
+    )
+}
+
+/// Waits for `bus_name` to have no owner on `conn` via `NameOwnerChanged` without polling.
+pub async fn wait_for_bus_name_released(conn: &Connection, bus_name: &str, timeout: Duration) {
+    let Ok(dbus) = zbus::fdo::DBusProxy::new(conn).await else {
+        return;
+    };
+    let Ok(well_known) = zbus::names::BusName::try_from(bus_name) else {
+        return;
+    };
+    let Ok(mut stream) = dbus
+        .receive_name_owner_changed_with_args(&[(0, bus_name), (2, "")])
+        .await
+    else {
+        return;
+    };
+    if !dbus.name_has_owner(well_known).await.unwrap_or(false) {
+        return;
+    }
+    let _ = tokio::time::timeout(timeout, stream.next()).await;
+}
 
 pub async fn connect_agent_proxy(conn: &Connection) -> zbus::Result<AgentProxy<'static>> {
     AgentProxy::builder(conn)
@@ -53,13 +103,20 @@ pub async fn start_services(
     core: Arc<DaemonCore>,
     client_count_tx: watch::Sender<usize>,
 ) -> Result<(Connection, Arc<Mutex<ClawSessionManager>>)> {
+    Ok(start_services_with_options(core, client_count_tx, true).await?)
+}
+
+pub async fn start_services_with_options(
+    core: Arc<DaemonCore>,
+    client_count_tx: watch::Sender<usize>,
+    claim_bus_name: bool,
+) -> zbus::Result<(Connection, Arc<Mutex<ClawSessionManager>>)> {
     let claw_subsystem = crate::claw::ClawSubsystem::new(core.state.clone());
     let session_manager = Arc::new(Mutex::new(ClawSessionManager::new(Arc::new(
         claw_subsystem.clone(),
     ))));
 
-    let conn = Builder::session()
-        .name(boxxy_sys_utils::agent_bus_name())
+    let mut builder = Builder::session()
         .serve_at(
             "/dev/boxxy/Agent",
             AgentInterface {
@@ -80,9 +137,18 @@ pub async fn start_services(
                 core.dream_status.clone(),
                 core.power.clone(),
             ),
-        )
-        .build()
-        .await?;
+        );
+
+    if claim_bus_name {
+        // Request the well-known name *after* ObjectServer starts (`Builder::serve_at`),
+        // without `REPLACE_EXISTING` so concurrent daemon launches resolve atomically
+        // via `zbus::Error::NameTaken` instead of stealing an active daemon's name.
+        builder = builder
+            .name(boxxy_sys_utils::agent_bus_name())
+            .replace_existing_names(false);
+    }
+
+    let conn = builder.build().await?;
 
     broadcasters::spawn_signal_broadcasters(&conn, &core, &session_manager);
 
@@ -581,5 +647,157 @@ mod tests {
             .await
             .expect("second drain");
         assert!(empty.is_empty());
+    }
+
+    #[tokio::test]
+    async fn p2p_request_stop_dispatches_reply_before_closing_connection() {
+        use crate::claw::CharacterRegistry;
+        use crate::daemon::lifecycle;
+
+        let (p0, p1) = UnixStream::pair().expect("unix stream pair");
+        let state = AgentState::new();
+        let db = boxxy_db::Db::new_in_memory().await.expect("in-memory db");
+        let registry = Arc::new(CharacterRegistry::load_or_default(&db).await);
+        let (client_tx, client_rx) = watch::channel(0usize);
+        let ghost = lifecycle::start(client_rx);
+        let dream_status = DreamStatusCell::new(DreamStatus::Idle);
+        let power_monitor = power::ac_only();
+
+        let core = Arc::new(DaemonCore {
+            state: state.clone(),
+            registry,
+            power: power_monitor,
+            ghost,
+            dream_status,
+            db,
+        });
+        let claw_subsystem = ClawSubsystem::new(state);
+        let session_manager = Arc::new(Mutex::new(ClawSessionManager::new(Arc::new(
+            claw_subsystem,
+        ))));
+
+        let (server_conn, client_conn) = futures_util::try_join!(
+            Builder::unix_stream(p0)
+                .server(Guid::generate())
+                .p2p()
+                .serve_at(
+                    "/dev/boxxy/Agent",
+                    AgentInterface {
+                        core,
+                        client_count_tx: client_tx,
+                        session_manager,
+                    },
+                )
+                .build(),
+            Builder::unix_stream(p1).p2p().build(),
+        )
+        .expect("p2p connections should build");
+
+        let agent_proxy = AgentProxy::new(&client_conn).await.expect("agent proxy");
+
+        // `ResponseDispatchNotifier::followed_by` must deliver `Ok(())` to the caller
+        // *before* closing the server connection, and then wake `closed().await` on both ends.
+        agent_proxy
+            .request_stop()
+            .await
+            .expect("request_stop should return Ok(()) cleanly before socket close");
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), server_conn.closed())
+            .await
+            .expect("server_conn.closed() should resolve promptly after request_stop");
+        assert!(server_conn.is_closed());
+
+        tokio::time::timeout(std::time::Duration::from_secs(2), client_conn.closed())
+            .await
+            .expect("client_conn.closed() should observe peer EOF");
+        assert!(client_conn.is_closed());
+    }
+
+    #[tokio::test]
+    async fn p2p_claw_domain_errors_preserve_typed_dbus_error_names() {
+        use crate::ipc::claw::AgentClawError;
+        use zbus::DBusError;
+
+        let (p0, p1) = UnixStream::pair().expect("unix stream pair");
+        let state = AgentState::new();
+
+        let (server_conn, client_conn) = futures_util::try_join!(
+            Builder::unix_stream(p0)
+                .server(Guid::generate())
+                .p2p()
+                .serve_at(
+                    "/dev/boxxy/BoxxyTerminal/Agent/Claw",
+                    ClawSubsystem::new(state),
+                )
+                .build(),
+            Builder::unix_stream(p1).p2p().build(),
+        )
+        .expect("p2p connections should build");
+
+        let _server_task = tokio::spawn(async move {
+            let _keep = server_conn;
+            std::future::pending::<()>().await;
+        });
+
+        let claw_proxy = AgentClawProxy::new(&client_conn).await.expect("claw proxy");
+
+        // 1. Built-in blacklisted path maps to `dev.boxxy.BoxxyTerminal.Agent.Error.BlacklistedPath`
+        let bl_err = claw_proxy
+            .read_file("/etc/shadow".to_string(), 1, 10)
+            .await
+            .expect_err("blacklisted read must fail");
+        let typed_bl = AgentClawError::from(bl_err);
+        assert_eq!(
+            typed_bl.name().as_str(),
+            "dev.boxxy.BoxxyTerminal.Agent.Error.BlacklistedPath"
+        );
+        assert!(matches!(typed_bl, AgentClawError::BlacklistedPath(_)));
+
+        // 2. Missing file maps to `dev.boxxy.BoxxyTerminal.Agent.Error.FileNotFound`
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let missing = tmp
+            .path()
+            .join("missing_fixture.txt")
+            .to_string_lossy()
+            .into_owned();
+        let nf_err = claw_proxy
+            .read_file(missing, 1, 10)
+            .await
+            .expect_err("missing file read must fail");
+        let typed_nf = AgentClawError::from(nf_err);
+        assert_eq!(
+            typed_nf.name().as_str(),
+            "dev.boxxy.BoxxyTerminal.Agent.Error.FileNotFound"
+        );
+        assert!(matches!(typed_nf, AgentClawError::FileNotFound(_)));
+
+        // 3. Dangerous PID maps to `dev.boxxy.BoxxyTerminal.Agent.Error.InvalidArgs`
+        let pid_err = claw_proxy
+            .kill_process(0, libc::SIGTERM)
+            .await
+            .expect_err("invalid pid must fail");
+        let typed_pid = AgentClawError::from(pid_err);
+        assert_eq!(
+            typed_pid.name().as_str(),
+            "dev.boxxy.BoxxyTerminal.Agent.Error.InvalidArgs"
+        );
+        assert!(matches!(typed_pid, AgentClawError::InvalidArgs(_)));
+    }
+
+    #[test]
+    fn is_service_unavailable_recognizes_fdo_errors() {
+        let svc_unknown =
+            zbus::Error::FDO(Box::new(zbus::fdo::Error::ServiceUnknown("gone".into())));
+        let no_owner =
+            zbus::Error::FDO(Box::new(zbus::fdo::Error::NameHasNoOwner("none".into())));
+        let unknown_obj =
+            zbus::Error::FDO(Box::new(zbus::fdo::Error::UnknownObject("no path".into())));
+        let other_fdo = zbus::Error::FDO(Box::new(zbus::fdo::Error::InvalidArgs("bad".into())));
+
+        assert!(is_service_unavailable(&svc_unknown));
+        assert!(is_service_unavailable(&no_owner));
+        assert!(is_service_unavailable(&unknown_obj));
+        assert!(!is_service_unavailable(&other_fdo));
+        assert!(!is_service_unavailable(&zbus::Error::InvalidReply));
     }
 }

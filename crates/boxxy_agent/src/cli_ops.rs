@@ -2,10 +2,20 @@
 //! `boxxy-terminal +doctor`, and the low-level `boxxy-agent` daemon binary.
 
 use crate::ipc::pty::DetachedSessionInfo;
-use crate::ipc::{connect_agent_proxy, connect_maintenance_proxy, connect_pty_proxy};
+use crate::ipc::{
+    connect_agent_proxy, connect_control_session, connect_maintenance_proxy, connect_pty_proxy,
+    is_service_unavailable,
+};
 use anyhow::{Context, Result};
 use serde::Serialize;
-use zbus::Connection;
+
+fn map_daemon_call_error(err: zbus::Error, bus_name: &str) -> anyhow::Error {
+    if is_service_unavailable(&err) {
+        anyhow::Error::new(err).context(format!("No running boxxy-agent responded on '{bus_name}'"))
+    } else {
+        anyhow::Error::new(err).context(format!("D-Bus call to '{bus_name}' failed"))
+    }
+}
 
 /// Snapshot of a running `boxxy-agent` daemon's status over session D-Bus.
 #[derive(Debug, Clone, Serialize)]
@@ -23,29 +33,37 @@ pub struct DaemonStatusReport {
 /// Queries the active `boxxy-agent` instance on the session D-Bus.
 /// Returns an error if the session bus is unreachable or no daemon owns `agent_bus_name()`.
 pub async fn query_status() -> Result<DaemonStatusReport> {
-    let conn = Connection::session()
+    let conn = connect_control_session()
         .await
         .context("Failed to connect to the session D-Bus")?;
     let bus_name = boxxy_sys_utils::agent_bus_name().to_string();
-    let agent_proxy = connect_agent_proxy(&conn).await?;
-    let maint_proxy = connect_maintenance_proxy(&conn).await?;
-    let pty_proxy = connect_pty_proxy(&conn).await?;
+    let (agent_proxy, maint_proxy, pty_proxy) = tokio::try_join!(
+        connect_agent_proxy(&conn),
+        connect_maintenance_proxy(&conn),
+        connect_pty_proxy(&conn),
+    )?;
 
     let version = agent_proxy
         .get_version()
         .await
-        .with_context(|| format!("No running boxxy-agent responded on '{bus_name}'"))?;
-    let config_dir = agent_proxy.get_config_dir().await.unwrap_or_default();
-    let dream_cycle = maint_proxy
-        .get_maintenance_status()
-        .await
-        .unwrap_or_else(|_| "unknown".to_string());
-    let on_battery = maint_proxy.is_on_battery().await.unwrap_or(false);
-    let claw_sessions = agent_proxy.list_claw_sessions().await.unwrap_or_default();
-    let detached_ptys = pty_proxy
-        .list_detached_sessions_detailed()
-        .await
-        .unwrap_or_default();
+        .map_err(|e| map_daemon_call_error(e, &bus_name))?;
+    let (config_dir, dream_cycle, on_battery, claw_sessions, detached_ptys) = tokio::join!(
+        async { agent_proxy.get_config_dir().await.unwrap_or_default() },
+        async {
+            maint_proxy
+                .get_maintenance_status()
+                .await
+                .unwrap_or_else(|_| "unknown".to_string())
+        },
+        async { maint_proxy.is_on_battery().await.unwrap_or(false) },
+        async { agent_proxy.list_claw_sessions().await.unwrap_or_default() },
+        async {
+            pty_proxy
+                .list_detached_sessions_detailed()
+                .await
+                .unwrap_or_default()
+        },
+    );
 
     Ok(DaemonStatusReport {
         bus_name,
@@ -61,7 +79,7 @@ pub async fn query_status() -> Result<DaemonStatusReport> {
 
 /// Lists all detached PTY sessions currently kept alive by `boxxy-agent`.
 pub async fn query_detached_sessions() -> Result<Vec<DetachedSessionInfo>> {
-    let conn = Connection::session()
+    let conn = connect_control_session()
         .await
         .context("Failed to connect to the session D-Bus")?;
     let proxy = connect_pty_proxy(&conn).await?;
@@ -69,12 +87,12 @@ pub async fn query_detached_sessions() -> Result<Vec<DetachedSessionInfo>> {
     proxy
         .list_detached_sessions_detailed()
         .await
-        .with_context(|| format!("No running boxxy-agent responded on '{bus_name}'"))
+        .map_err(|e| map_daemon_call_error(e, bus_name))
 }
 
 /// Requests a graceful stop of the running `boxxy-agent` daemon (flushes telemetry first).
 pub async fn request_stop() -> Result<()> {
-    let conn = Connection::session()
+    let conn = connect_control_session()
         .await
         .context("Failed to connect to the session D-Bus")?;
     let proxy = connect_agent_proxy(&conn).await?;
@@ -82,13 +100,13 @@ pub async fn request_stop() -> Result<()> {
     proxy
         .request_stop()
         .await
-        .with_context(|| format!("No running boxxy-agent responded on '{bus_name}'"))?;
+        .map_err(|e| map_daemon_call_error(e, bus_name))?;
     Ok(())
 }
 
 /// Requests an in-place `exec()` reload of the running `boxxy-agent` daemon.
 pub async fn request_restart() -> Result<()> {
-    let conn = Connection::session()
+    let conn = connect_control_session()
         .await
         .context("Failed to connect to the session D-Bus")?;
     let proxy = connect_agent_proxy(&conn).await?;
@@ -96,7 +114,7 @@ pub async fn request_restart() -> Result<()> {
     proxy
         .request_reload()
         .await
-        .with_context(|| format!("No running boxxy-agent responded on '{bus_name}'"))?;
+        .map_err(|e| map_daemon_call_error(e, bus_name))?;
     Ok(())
 }
 

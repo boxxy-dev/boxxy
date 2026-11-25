@@ -11,7 +11,6 @@
 
 use anyhow::Result;
 use tokio::sync::watch;
-use zbus::Connection;
 
 #[zbus::proxy(
     interface = "org.freedesktop.UPower",
@@ -64,15 +63,31 @@ pub fn ac_only() -> PowerMonitor {
     PowerMonitor { rx }
 }
 
-/// Subscribes to UPower and pushes `OnBattery` changes into `tx`. If
-/// UPower is unreachable (container, minimal desktop) this returns
-/// silently; the monitor stays at `false` and we let work proceed.
-pub async fn start(conn: &Connection, tx: watch::Sender<bool>) -> Result<()> {
-    let upower = match UPowerProxy::new(conn).await {
+/// Subscribes to UPower on the **system** D-Bus and pushes `OnBattery` changes
+/// into `tx`. If the system bus or UPower is unreachable (container, minimal
+/// desktop, CI) this returns silently; the monitor stays at `false` and lets
+/// background work proceed.
+pub async fn start(tx: watch::Sender<bool>) -> Result<()> {
+    let sys_conn = match zbus::connection::Builder::system()
+        .method_timeout(crate::ipc::CONTROL_METHOD_TIMEOUT)
+        .build()
+        .await
+    {
+        Ok(c) => c,
+        Err(e) => {
+            log::info!(
+                "power: system D-Bus not reachable ({}); assuming AC always — auto-dreaming stays enabled",
+                e
+            );
+            return Ok(());
+        }
+    };
+
+    let upower = match UPowerProxy::new(&sys_conn).await {
         Ok(p) => p,
         Err(e) => {
             log::info!(
-                "power: UPower not reachable ({}); assuming AC always — auto-dreaming stays enabled",
+                "power: UPower proxy init failed ({}); assuming AC always — auto-dreaming stays enabled",
                 e
             );
             return Ok(());
@@ -84,16 +99,23 @@ pub async fn start(conn: &Connection, tx: watch::Sender<bool>) -> Result<()> {
             let _ = tx.send(b);
             log::info!("power: initial state on_battery={}", b);
         }
+        Err(e) if crate::ipc::is_service_unavailable(&e) => {
+            log::info!(
+                "power: UPower service not present on system bus; assuming AC always — auto-dreaming stays enabled"
+            );
+            return Ok(());
+        }
         Err(e) => log::warn!("power: OnBattery read failed: {}", e),
     }
 
     let upower_for_task = upower;
     tokio::spawn(async move {
         use futures_util::StreamExt;
+        let _keep_conn = &sys_conn;
         let mut stream = upower_for_task.receive_on_battery_changed().await;
 
         while let Some(change) = stream.next().await {
-            if tx.is_closed() {
+            if sys_conn.is_closed() || tx.is_closed() {
                 break;
             }
             if let Ok(b) = change.get().await

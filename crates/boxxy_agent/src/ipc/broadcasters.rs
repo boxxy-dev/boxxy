@@ -21,6 +21,9 @@ pub(crate) fn spawn_signal_broadcasters(
     let conn_for_signals = conn.clone();
     tokio::spawn(async move {
         loop {
+            if conn_for_signals.is_closed() {
+                break;
+            }
             let snapshot = match rx_registry.recv().await {
                 Ok(snapshot) => snapshot,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(skipped)) => {
@@ -56,6 +59,9 @@ pub(crate) fn spawn_signal_broadcasters(
     tokio::spawn(async move {
         let mut last_detached_json: Option<String> = None;
         loop {
+            if conn_for_pty_signals.is_closed() {
+                break;
+            }
             match rx_pty.recv().await {
                 Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
@@ -116,6 +122,9 @@ pub(crate) fn spawn_signal_broadcasters(
         let workspace_for_tasks = boxxy_claw::registry::workspace::global_workspace().await;
         let mut rx_tasks = workspace_for_tasks.subscribe_tasks();
         loop {
+            if conn_for_tasks.is_closed() {
+                break;
+            }
             match rx_tasks.recv().await {
                 Ok(()) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,

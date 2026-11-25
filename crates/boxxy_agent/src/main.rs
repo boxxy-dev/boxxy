@@ -151,7 +151,7 @@ fn main() -> Result<()> {
         if !cli.no_singleton {
             match daemon::singleton::try_claim_or_handoff().await? {
                 daemon::singleton::ClaimResult::Claimed => {
-                    info!("Singleton claimed — starting daemon");
+                    info!("No conflicting daemon active — starting daemon");
                 }
                 daemon::singleton::ClaimResult::HandedOff => {
                     info!("Existing daemon is up-to-date — exiting");
@@ -164,7 +164,7 @@ fn main() -> Result<()> {
             }
         }
 
-        daemon::DaemonCore::run().await
+        daemon::DaemonCore::run_with_options(cli.no_singleton).await
     })
 }
 

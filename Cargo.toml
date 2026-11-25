@@ -82,7 +82,7 @@ log = { version = "0.4.35", features = ["std", "serde", "release_max_level_info"
 env_logger = "0.11.11"
 rig = { version = "0.47.1", default-features = false, features = ["reqwest", "agent", "rustls"] }
 nix = { version = "0.31.3", features = ["process", "term", "fs", "signal", "ioctl", "user"] }
-zbus = { version = "6.3.0", features = ["tokio", "p2p"] }
+zbus = { version = "6.5.0", default-features = false, features = ["tokio", "proxy", "service", "tracing", "p2p"] }
 libc = "0.2"
 ashpd = { version = "0.14.0", features = ["open_uri"] }
 gstreamer = "0.25.4"

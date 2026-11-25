@@ -10,7 +10,10 @@ use anyhow::Result;
 use boxxy_claw_protocol::{ClawEngineEvent, ClawMessage};
 use std::sync::Arc;
 use tokio::sync::{Mutex, watch};
-use zbus::{Connection, object_server::SignalEmitter};
+use zbus::{
+    Connection,
+    object_server::{ResponseDispatchNotifier, SignalEmitter},
+};
 
 pub struct AgentInterface {
     pub core: Arc<DaemonCore>,
@@ -407,8 +410,13 @@ impl AgentInterface {
         serde_json::to_string(&peer_opt).unwrap_or_default()
     }
 
-    async fn request_reload(&self) {
-        log::info!("Self-reload requested. Flushing sessions, telemetry, and executing new binary...");
+    async fn request_reload(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> ResponseDispatchNotifier<()> {
+        log::info!(
+            "Self-reload requested. Flushing sessions, telemetry, and executing new binary..."
+        );
         self.session_manager.lock().await.shutdown_all();
         boxxy_telemetry::flush_journal().await;
 
@@ -431,8 +439,15 @@ impl AgentInterface {
             .filter(|a| a != "--background" && a != "--sync-settings")
             .collect();
 
-        tokio::spawn(async move {
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        // Wait until zbus has dispatched the `RequestReload` reply (`zbus` 6.4+),
+        // then synchronously release our bus name and flush the socket before `execvp`
+        // so the replacement process never races its own stale name ownership.
+        let conn_clone = conn.clone();
+        ResponseDispatchNotifier::followed_by((), conn, async move {
+            let _ = conn_clone
+                .release_name(boxxy_sys_utils::agent_bus_name())
+                .await;
+            let _ = conn_clone.flush().await;
             if let Ok(c_exe) = std::ffi::CString::new(exe_clean) {
                 let c_args: Vec<std::ffi::CString> = args
                     .iter()
@@ -440,15 +455,30 @@ impl AgentInterface {
                     .collect();
                 let _ = nix::unistd::execvp(&c_exe, &c_args);
             }
-        });
+        })
     }
 
-    async fn request_stop(&self) {
-        log::info!("Stop requested. Terminating sessions, flushing telemetry, and exiting...");
+    async fn request_stop(
+        &self,
+        #[zbus(connection)] conn: &zbus::Connection,
+    ) -> ResponseDispatchNotifier<()> {
+        log::info!("Stop requested. Terminating sessions, flushing telemetry, and closing bus...");
         self.session_manager.lock().await.shutdown_all();
         self.core.state.pty_registry.terminate_all().await;
         boxxy_telemetry::flush_journal().await;
-        std::process::exit(0);
+
+        // Dispatch the `Ok(())` reply to the caller *before* releasing the bus name
+        // and closing the connection (`zbus` 6.4+ `ResponseDispatchNotifier::followed_by`),
+        // waking `conn.closed().await` in `DaemonCore::run` for a clean exit without
+        // severing the caller's D-Bus call with `NoReply`.
+        let conn_clone = conn.clone();
+        ResponseDispatchNotifier::followed_by((), conn, async move {
+            let _ = conn_clone
+                .release_name(boxxy_sys_utils::agent_bus_name())
+                .await;
+            let _ = conn_clone.flush().await;
+            let _ = conn_clone.close().await;
+        })
     }
 
     async fn post_claw_message(&self, session_id: &str, message_json: &str) {

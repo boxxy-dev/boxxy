@@ -26,6 +26,7 @@ boxxy-command-palette = { path = "../command_palette" }
 chrono.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true
+futures-util.workspace = true
 tokio.workspace = true
 uuid.workspace = true
 serde.workspace = true

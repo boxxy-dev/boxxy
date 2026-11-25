@@ -3,13 +3,16 @@
 
 use anyhow::{Context, Result};
 use boxxy_sys_utils::is_flatpak;
+use futures_util::StreamExt;
 use log::{info, warn};
 use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 use tokio::io::AsyncReadExt;
 use tokio::process::Command;
 use zbus::{Connection, proxy};
 
 const AGENT_VERSION: &str = concat!(env!("CARGO_PKG_VERSION"), "+", env!("GIT_HASH"));
+const DEPLOYER_METHOD_TIMEOUT: Duration = Duration::from_secs(3);
 
 /// Proxy pointing at the running Ghost's version interface.
 #[proxy(
@@ -21,6 +24,13 @@ trait AgentVersion {
     async fn get_version(&self) -> zbus::Result<String>;
     async fn get_config_dir(&self) -> zbus::Result<String>;
     async fn request_stop(&self) -> zbus::Result<()>;
+}
+
+async fn connect_deployer_session() -> zbus::Result<Connection> {
+    zbus::connection::Builder::session()
+        .method_timeout(DEPLOYER_METHOD_TIMEOUT)
+        .build()
+        .await
 }
 
 async fn connect_version_proxy(conn: &Connection) -> zbus::Result<AgentVersionProxy<'static>> {
@@ -50,7 +60,7 @@ fn agent_host_path() -> Result<PathBuf> {
 /// 3. Wait for the agent to claim its D-Bus name.
 pub async fn ensure_agent_running() -> Result<()> {
     let host_path = agent_host_path()?;
-    let conn = Connection::session().await.ok();
+    let conn = connect_deployer_session().await.ok();
 
     if is_flatpak() && needs_redeploy(conn.as_ref(), &host_path).await {
         if let Some(ref c) = conn {
@@ -67,7 +77,7 @@ pub async fn ensure_agent_running() -> Result<()> {
     if spawned {
         let ready_conn = match conn {
             Some(c) => c,
-            None => Connection::session().await?,
+            None => connect_deployer_session().await?,
         };
         wait_for_agent_ready(&ready_conn).await?;
     }
@@ -76,6 +86,20 @@ pub async fn ensure_agent_running() -> Result<()> {
 }
 
 async fn wait_for_agent_stopped(conn: &Connection) {
+    let bus_name = boxxy_sys_utils::agent_bus_name();
+    if let Ok(dbus) = zbus::fdo::DBusProxy::new(conn).await
+        && let Ok(well_known) = zbus::names::BusName::try_from(bus_name)
+        && let Ok(mut stream) = dbus
+            .receive_name_owner_changed_with_args(&[(0, bus_name), (2, "")])
+            .await
+    {
+        if !dbus.name_has_owner(well_known).await.unwrap_or(false) {
+            return;
+        }
+        let _ = tokio::time::timeout(Duration::from_millis(600), stream.next()).await;
+        return;
+    }
+
     let Ok(proxy) = connect_version_proxy(conn).await else {
         return;
     };
@@ -83,30 +107,63 @@ async fn wait_for_agent_stopped(conn: &Connection) {
         if proxy.get_version().await.is_err() {
             return;
         }
-        tokio::time::sleep(std::time::Duration::from_millis(15)).await;
+        tokio::time::sleep(Duration::from_millis(15)).await;
     }
 }
 
 async fn wait_for_agent_ready(conn: &Connection) -> Result<()> {
     let proxy = connect_version_proxy(conn).await?;
-    let mut attempts = 0;
-    let max_attempts = 200; // 3 seconds total at 15ms intervals
+    let bus_name = boxxy_sys_utils::agent_bus_name();
+
+    // Arm `NameOwnerChanged` *before* the initial `get_version` probe so we wake
+    // in 0ms the instant the spawned daemon claims its bus name without missing edges.
+    let mut owner_stream = match zbus::fdo::DBusProxy::new(conn).await {
+        Ok(dbus) => dbus
+            .receive_name_owner_changed_with_args(&[(0, bus_name)])
+            .await
+            .ok(),
+        Err(_) => None,
+    };
+
+    if let Ok(ver) = proxy.get_version().await {
+        info!("Agent is ready (v{ver})");
+        return Ok(());
+    }
+
+    let deadline = Instant::now() + Duration::from_secs(3);
+    let mut attempts = 0usize;
 
     loop {
+        let now = Instant::now();
+        if now >= deadline {
+            match proxy.get_version().await {
+                Ok(ver) => {
+                    info!("Agent is ready (v{ver})");
+                    return Ok(());
+                }
+                Err(e) => {
+                    anyhow::bail!("Timed out waiting for agent to claim D-Bus name: {e}");
+                }
+            }
+        }
+
+        let wait_slice = (deadline - now).min(Duration::from_millis(50));
+        if let Some(ref mut stream) = owner_stream {
+            let _ = tokio::time::timeout(wait_slice, stream.next()).await;
+        } else {
+            tokio::time::sleep(Duration::from_millis(15)).await;
+        }
+
         match proxy.get_version().await {
             Ok(ver) => {
                 info!("Agent is ready (v{ver})");
                 return Ok(());
             }
-            Err(e) => {
+            Err(_) => {
                 attempts += 1;
-                if attempts >= max_attempts {
-                    anyhow::bail!("Timed out waiting for agent to claim D-Bus name: {e}");
+                if attempts.is_multiple_of(10) {
+                    info!("Waiting for agent D-Bus name ({bus_name})...");
                 }
-                if attempts % 20 == 0 {
-                    info!("Waiting for agent D-Bus name (attempt {attempts}/{max_attempts})...");
-                }
-                tokio::time::sleep(std::time::Duration::from_millis(15)).await;
             }
         }
     }

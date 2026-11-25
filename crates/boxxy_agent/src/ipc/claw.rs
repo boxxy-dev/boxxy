@@ -1,4 +1,57 @@
-use zbus::proxy;
+use zbus::{DBusError, proxy};
+
+/// Domain-specific D-Bus error replies for `dev.boxxy.BoxxyTerminal.Agent.Claw`.
+///
+/// Preserves structured error categories across the D-Bus boundary (`zbus` 6.5+)
+/// instead of collapsing all host tool failures into generic `fdo::Error::Failed`.
+#[derive(Debug, Clone, PartialEq, DBusError)]
+#[zbus(prefix = "dev.boxxy.BoxxyTerminal.Agent.Error")]
+pub enum AgentClawError {
+    #[zbus(error)]
+    ZBus(zbus::Error),
+    BlacklistedPath(String),
+    FileNotFound(String),
+    InvalidArgs(String),
+    ExecutionFailed(String),
+}
+
+impl AgentClawError {
+    /// Classifies an internal host error into a typed D-Bus domain error.
+    pub fn from_anyhow(err: anyhow::Error) -> Self {
+        let is_io_not_found = err
+            .downcast_ref::<std::io::Error>()
+            .is_some_and(|io_err| io_err.kind() == std::io::ErrorKind::NotFound);
+        let msg = err.to_string();
+
+        if msg.contains("blacklisted for security reasons") {
+            Self::BlacklistedPath(msg)
+        } else if is_io_not_found
+            || msg.starts_with("File not found:")
+            || msg.starts_with("Working directory does not exist:")
+        {
+            Self::FileNotFound(msg)
+        } else if msg.starts_with("Invalid PID")
+            || msg.starts_with("Refusing to signal")
+            || msg.starts_with("Invalid signal number")
+            || msg.starts_with("Path is a directory")
+        {
+            Self::InvalidArgs(msg)
+        } else {
+            Self::ExecutionFailed(msg)
+        }
+    }
+
+    /// Unwraps the domain payload message without D-Bus error-name prefixes when available.
+    pub fn into_message(self) -> String {
+        match self {
+            Self::BlacklistedPath(msg)
+            | Self::FileNotFound(msg)
+            | Self::InvalidArgs(msg)
+            | Self::ExecutionFailed(msg) => msg,
+            Self::ZBus(err) => err.to_string(),
+        }
+    }
+}
 
 #[proxy(
     interface = "dev.boxxy.BoxxyTerminal.Agent.Claw",

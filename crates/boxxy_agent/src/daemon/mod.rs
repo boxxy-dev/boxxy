@@ -32,6 +32,10 @@ pub struct DaemonCore {
 
 impl DaemonCore {
     pub async fn run() -> Result<()> {
+        Self::run_with_options(false).await
+    }
+
+    pub async fn run_with_options(no_singleton: bool) -> Result<()> {
         let state = AgentState::new();
         let db = boxxy_db::Db::new().await.unwrap_or_else(|e| {
             panic!("Fatal error: failed to initialize database: {}", e);
@@ -59,17 +63,29 @@ impl DaemonCore {
             db: db.clone(),
         });
 
-        // Start D-Bus services on a fresh session-bus connection.
+        // Start D-Bus services and claim the bus name atomically after ObjectServer is ready.
         let (conn, session_manager) =
-            crate::ipc::start_services(core.clone(), client_tx.clone()).await?;
+            match crate::ipc::start_services_with_options(core.clone(), client_tx.clone(), !no_singleton).await {
+                Ok(pair) => pair,
+                Err(zbus::Error::NameTaken) => {
+                    info!(
+                        "Another boxxy-agent claimed {} concurrently — standing down",
+                        boxxy_sys_utils::agent_bus_name()
+                    );
+                    return Ok(());
+                }
+                Err(e) => return Err(e.into()),
+            };
         info!("D-Bus services registered");
 
         // Spawn the client owner tracker. This handles automatic cleanup of
         // character assignments, PTY sessions, and swarm locks when a UI process disconnects.
         let workspace = boxxy_claw::registry::workspace::global_workspace().await;
         let session_manager_for_sig = session_manager.clone();
+        let session_manager_for_close = session_manager.clone();
         let session_manager_for_reload = session_manager.clone();
         let pty_registry_for_sig = core.state.pty_registry.clone();
+        let pty_registry_for_close = core.state.pty_registry.clone();
         crate::ipc::client_tracker::spawn_owner_tracker(
             &conn,
             registry.clone(),
@@ -80,9 +96,9 @@ impl DaemonCore {
         )
         .await?;
 
-        // Wire up UPower now that we have a connection. Failures are
-        // logged and non-fatal — `power` stays at the AC default.
-        if let Err(e) = power::start(&conn, power_tx).await {
+        // Wire up UPower on the system bus. Failures are logged and non-fatal —
+        // `power` stays at the AC default.
+        if let Err(e) = power::start(power_tx).await {
             log::warn!("power: start() failed: {}; assuming AC", e);
         }
 
@@ -104,6 +120,9 @@ impl DaemonCore {
         tokio::spawn(async move {
             let mut last_statuses: Option<Vec<(String, bool)>> = None;
             loop {
+                if conn_for_mcp.is_closed() {
+                    break;
+                }
                 let settings = boxxy_preferences::Settings::load();
                 let has_enabled = settings.mcp_servers.iter().any(|s| s.enabled);
                 if has_enabled && (!ghost_for_mcp.is_ghost() || last_statuses.is_none()) {
@@ -143,27 +162,35 @@ impl DaemonCore {
             }
         });
 
-        // Graceful shutdown on SIGTERM / SIGINT: flush telemetry before exiting.
+        // Graceful shutdown on SIGTERM / SIGINT: close the bus connection so the
+        // unified teardown path below flushes sessions and telemetry before exiting.
         #[cfg(unix)]
-        tokio::spawn(async move {
-            use tokio::signal::unix::{SignalKind, signal};
-            let mut sigterm = match signal(SignalKind::terminate()) {
-                Ok(s) => s,
-                Err(_) => return,
-            };
-            let mut sigint = match signal(SignalKind::interrupt()) {
-                Ok(s) => s,
-                Err(_) => return,
-            };
-            tokio::select! {
-                _ = sigterm.recv() => log::info!("SIGTERM received; terminating sessions and flushing telemetry before exit..."),
-                _ = sigint.recv() => log::info!("SIGINT received; terminating sessions and flushing telemetry before exit..."),
-            }
-            session_manager_for_sig.lock().await.shutdown_all();
-            pty_registry_for_sig.terminate_all().await;
-            boxxy_telemetry::flush_journal().await;
-            std::process::exit(0);
-        });
+        {
+            let conn_for_sig = conn.clone();
+            tokio::spawn(async move {
+                use tokio::signal::unix::{SignalKind, signal};
+                let mut sigterm = match signal(SignalKind::terminate()) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                let mut sigint = match signal(SignalKind::interrupt()) {
+                    Ok(s) => s,
+                    Err(_) => return,
+                };
+                tokio::select! {
+                    _ = sigterm.recv() => log::info!("SIGTERM received; shutting down sessions and flushing telemetry..."),
+                    _ = sigint.recv() => log::info!("SIGINT received; shutting down sessions and flushing telemetry..."),
+                }
+                session_manager_for_sig.lock().await.shutdown_all();
+                pty_registry_for_sig.terminate_all().await;
+                boxxy_telemetry::flush_journal().await;
+                let _ = conn_for_sig
+                    .release_name(boxxy_sys_utils::agent_bus_name())
+                    .await;
+                let _ = conn_for_sig.flush().await;
+                let _ = conn_for_sig.close().await;
+            });
+        }
 
         // Zombie-guard sweeper: sweeps detached idle sessions (> 4h TTL, viewer_count == 0),
         // reaps idle prompt-only detached shells, and prunes expired `Exited` records.
@@ -242,10 +269,14 @@ impl DaemonCore {
             });
         }
 
-        // The D-Bus connection + spawned tasks keep the daemon alive;
-        // this loop is just the "don't return" anchor.
-        loop {
-            tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
-        }
+        // Wait until the session D-Bus connection closes (via `RequestStop`, `SIGTERM`/`SIGINT`,
+        // or user desktop session logout closing the bus socket) so `boxxy-agent` never stays
+        // orphaned in the background after the session bus goes away.
+        conn.closed().await;
+        log::info!("Session D-Bus connection closed; completing graceful daemon shutdown...");
+        session_manager_for_close.lock().await.shutdown_all();
+        pty_registry_for_close.terminate_all().await;
+        boxxy_telemetry::flush_journal().await;
+        Ok(())
     }
 }
