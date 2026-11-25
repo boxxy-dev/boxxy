@@ -259,21 +259,11 @@ impl ClawSession {
         };
 
         let catalog = get_active_catalog();
-        let host_slug = catalog
-            .iter()
-            .find(|c| c.config.id == self.character_id)
-            .map_or_else(
-                || self.name.to_lowercase().replace(' ', "-"),
-                |c| c.config.name.clone(),
-            );
-
-        let host = SpeakerIdentity {
-            character_id: self.character_id.clone(),
-            display_name: crate::engine::session::roundtable::format_character_title(&host_slug),
-            slug: host_slug,
-            is_guest: false,
-            home_pane_id: None,
-        };
+        let host = crate::engine::session::roundtable::resolve_host_speaker(
+            &self.character_id,
+            &self.name,
+            &catalog,
+        );
 
         let mut state_lock = self.state.lock().await;
         state_lock.next_roundtable_turn = None;

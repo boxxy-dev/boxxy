@@ -45,7 +45,10 @@ impl DemotionExtractor {
 /// Strips dynamic context blocks (`## YOUR IDENTITY`, `## CURRENT TURN CONTEXT`, etc.)
 /// from a user message text so background memory flush calls don't waste tokens on snapshots.
 pub(crate) fn clean_user_text_for_flush(raw: &str) -> &str {
-    if raw.trim_start().starts_with("[ROUNDTABLE TURN") {
+    let trimmed_start = raw.trim_start();
+    if trimmed_start.starts_with("[ROUNDTABLE TURN")
+        || trimmed_start.starts_with("[COLLABORATIVE HANDOFF")
+    {
         return "";
     }
     let mut end = raw.len();
@@ -124,6 +127,7 @@ pub async fn flush_history(
                         && trimmed != "[SILENT_ACK]"
                         && trimmed != "[Previous task was interrupted by the user]"
                         && trimmed != crate::engine::turn::history::SESSION_CHECKPOINT_ACK
+                        && trimmed != crate::engine::turn::history::WHILE_YOU_SLEPT_ACK
                     {
                         let _ = writeln!(text_to_summarize, "ASSISTANT: {trimmed}");
                     }

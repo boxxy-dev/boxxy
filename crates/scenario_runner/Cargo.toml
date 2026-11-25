@@ -33,5 +33,7 @@ tokio.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+base64.workspace = true
 boxxy-cli.workspace = true
+image.workspace = true
 serial_test.workspace = true

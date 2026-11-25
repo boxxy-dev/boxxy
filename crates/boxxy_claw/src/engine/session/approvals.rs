@@ -143,6 +143,7 @@ mod pending_drain_tests {
             parent_id: None,
             is_headless: false,
             sleep_timestamp: None,
+            sleep_commands: Vec::new(),
             awaiting_tasks: Vec::new(),
             tx_self: tx,
             mcp_handle: None,

@@ -7538,6 +7538,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-channel",
+ "base64 0.23.1",
  "boxxy-agent",
  "boxxy-ai-core",
  "boxxy-claw",
@@ -7549,6 +7550,7 @@ dependencies = [
  "boxxy-preferences",
  "boxxy-sys-utils",
  "env_logger",
+ "image",
  "libc",
  "log",
  "nix",

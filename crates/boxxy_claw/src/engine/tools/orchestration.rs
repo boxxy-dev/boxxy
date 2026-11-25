@@ -704,16 +704,11 @@ impl Tool for InviteCharacterTool {
 
         let (host_identity, current_speaker_id) = {
             let state = self.state.lock().await;
-            let host_slug = catalog
-                .iter()
-                .find(|c| c.config.id == state.character_id).map_or_else(|| state.agent_name.to_lowercase().replace(' ', "-"), |c| c.config.name.clone());
-            let host = crate::engine::session::roundtable::SpeakerIdentity {
-                character_id: state.character_id.clone(),
-                display_name: state.agent_name.clone(),
-                slug: host_slug,
-                is_guest: false,
-                home_pane_id: None,
-            };
+            let host = crate::engine::session::roundtable::resolve_host_speaker(
+                &state.character_id,
+                &state.agent_name,
+                &catalog,
+            );
             let (_, active_id) = state.effective_speaker();
             (host, active_id)
         };

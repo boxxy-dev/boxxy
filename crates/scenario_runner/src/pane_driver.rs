@@ -291,6 +291,28 @@ impl PaneDriver {
         .await
     }
 
+    /// Submits a `ClawMessage::ClawQuery` carrying inline base64 images and metadata anchors.
+    ///
+    /// # Errors
+    /// Returns an error if the session channel is closed.
+    pub async fn send_query_with_images(
+        &self,
+        query: impl Into<String>,
+        image_attachments: Vec<String>,
+        image_attachment_meta: Vec<boxxy_claw_protocol::ImageAttachmentMeta>,
+    ) -> Result<()> {
+        let snapshot = self.terminal_buffer.lock().clone();
+        self.send(ClawMessage::ClawQuery {
+            prompt_id: Some(Uuid::new_v4()),
+            query: query.into(),
+            snapshot,
+            cwd: self.cwd.to_string_lossy().into_owned(),
+            image_attachments,
+            image_attachment_meta,
+        })
+        .await
+    }
+
     /// Submits a `ClawMessage::ClawQuery` with an explicit `prompt_id` (useful for queue recall/cancel tests).
     ///
     /// # Errors

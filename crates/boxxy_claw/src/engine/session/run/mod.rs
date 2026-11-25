@@ -234,9 +234,15 @@ impl ClawSession {
                 match result {
                     Ok(summary) => {
                         state_lock.context_quality = crate::engine::ContextQuality::Full;
-                        state_lock.history.push(rig::message::Message::user(format!(
-                            "[WHILE_YOU_SLEPT]\n{summary}"
-                        )));
+                        let trimmed = summary.trim();
+                        if !trimmed.is_empty() {
+                            state_lock.history.push(rig::message::Message::user(format!(
+                                "[WHILE_YOU_SLEPT]\n{trimmed}"
+                            )));
+                            state_lock.history.push(rig::message::Message::assistant(
+                                crate::engine::turn::history::WHILE_YOU_SLEPT_ACK,
+                            ));
+                        }
                     }
                     Err(e) => {
                         log::warn!("Dreamer fallback triggered: {e}");

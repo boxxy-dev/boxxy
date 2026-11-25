@@ -139,21 +139,20 @@ pub fn spawn_turn(
         let (speaker, host_agent_name, _host_character_id, is_incognito) = {
             let mut state_lock = state.lock().await;
             state_lock.last_turn_paused_queue = false;
-            let host_name = if state_lock.agent_name.is_empty() {
+            let raw_host_name = if state_lock.agent_name.is_empty() {
                 agent_name.clone()
             } else {
                 state_lock.agent_name.clone()
             };
             let host_cid = state_lock.character_id.clone();
-            let spk = state_lock.active_speaker.clone().unwrap_or_else(|| {
-                crate::engine::session::roundtable::SpeakerIdentity {
-                    character_id: host_cid.clone(),
-                    display_name: host_name.clone(),
-                    slug: host_name.to_lowercase().replace(' ', "-"),
-                    is_guest: false,
-                    home_pane_id: None,
-                }
-            });
+            let cached_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+            let host_speaker = crate::engine::session::roundtable::resolve_host_speaker(
+                &host_cid,
+                &raw_host_name,
+                &cached_catalog,
+            );
+            let host_name = host_speaker.display_name.clone();
+            let spk = state_lock.active_speaker.clone().unwrap_or(host_speaker);
             (spk, host_name, host_cid, state_lock.incognito)
         };
         let agent_name = speaker.display_name.clone();
@@ -379,8 +378,11 @@ pub fn spawn_turn(
             let final_snapshot_text =
                 snapshot::process_snapshot(&snapshot_clone, &mut state_lock.last_snapshot_hash);
 
-            let mut roundtable_context = String::new();
-            if speaker.is_guest || state_lock.roundtable.participants.len() >= 2 {
+            let is_autonomous_handoff = prompt_clone.starts_with("[ROUNDTABLE TURN")
+                || prompt_clone.starts_with("[COLLABORATIVE HANDOFF");
+            let mut roundtable_context = if !is_autonomous_handoff
+                && (speaker.is_guest || state_lock.roundtable.participants.len() >= 2)
+            {
                 let roster: Vec<String> = state_lock
                     .roundtable
                     .participants
@@ -421,7 +423,7 @@ pub fn spawn_turn(
                         crate::engine::session::roundtable::YIELD_TO_USER_MARKER
                     )
                 };
-                roundtable_context = format!(
+                format!(
                     "\n--- ROUNDTABLE / MULTI-CHARACTER OVERLAY CHAT ---\n\
                     You are speaking as **{agent_name}** (`@{slug}`) in a live multi-character conversation inside **{host_agent_name}**'s overlay.\n\
                     Participants ALREADY in this room: {}.\n\
@@ -438,10 +440,12 @@ pub fn spawn_turn(
                         roster.join(", ")
                     },
                     slug = speaker.slug,
-                );
-            }
+                )
+            } else {
+                String::new()
+            };
 
-            if drama_mode {
+            if drama_mode && !is_autonomous_handoff {
                 roundtable_context.push_str(
                     "\n--- VISUAL NOVEL / DRAMA MODE ACTIVE (OVERRIDE ALL LENGTH & LIST FORMATTING) ---\n\
                     1. Speak in ONLY 1 to 2 short, punchy spoken sentences (maximum ~35 words total)!\n\
@@ -512,12 +516,16 @@ pub fn spawn_turn(
                 images_clone.len(),
                 &image_meta_clone,
             );
-            let full_prompt = format!("{annotated_prompt}{turn_tail}");
+            let settled_history_prompt = history::build_settled_user_history_text(
+                &annotated_prompt,
+                &resolved_file_refs.context_block,
+                &final_snapshot_text,
+            );
 
-            // --- AMNESIA FIX: IMMEDIATE PUSH ---
+            // --- AMNESIA FIX: IMMEDIATE PUSH (settled representation free of transient turn bloat) ---
             state_lock
                 .history
-                .push(rig::message::Message::user(full_prompt));
+                .push(rig::message::Message::user(settled_history_prompt));
 
             let h = state_lock.history.clone();
             let l = h.len();
@@ -766,14 +774,24 @@ pub fn spawn_turn(
                             .skip_while(|m| matches!(m, rig::message::Message::User { .. }))
                             .collect();
                         if let Some(rig::message::Message::Assistant(turn)) = new_tail.last_mut() {
-                            for item in &mut turn.content {
+                            let tagged = history::tag_assistant_text(
+                                &character_id,
+                                &agent_name,
+                                &display_response,
+                            );
+                            let mut updated_first = false;
+                            turn.content.retain_mut(|item| {
                                 if let rig::message::AssistantContent::Text(t) = item {
-                                    t.text = history::tag_assistant_text(
-                                        &character_id,
-                                        &agent_name,
-                                        &display_response,
-                                    );
+                                    if updated_first {
+                                        return false;
+                                    }
+                                    t.text.clone_from(&tagged);
+                                    updated_first = true;
                                 }
+                                true
+                            });
+                            if !updated_first && !display_response.is_empty() {
+                                turn.content.push(rig::message::AssistantContent::text(tagged));
                             }
                         }
                         state_lock.history.extend(new_tail);

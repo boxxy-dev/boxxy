@@ -3,6 +3,7 @@ use rig::message::Message;
 const SPEAKER_PREFIX: &str = "[SPEAKER_ID:";
 pub const SESSION_CHECKPOINT_PREFIX: &str = "[SESSION_CHECKPOINT]";
 pub const SESSION_CHECKPOINT_ACK: &str = "Understood. Retaining session checkpoint context.";
+pub const WHILE_YOU_SLEPT_ACK: &str = "Understood. Noted terminal activity while sleeping.";
 
 /// Maximum characters retained per tool result in turns older than the freshness window
 /// (matches `OpenCode` V2's `TRANSCRIPT_CLIP = 2000` in `session/compaction.ts`).
@@ -61,6 +62,35 @@ fn extract_referenced_files_block(section: &str) -> Option<String> {
     Some(format!("\n\n{}", section[start..end].trim()))
 }
 
+/// Builds the settled user message text stored in `SessionState.history` and SQLite.
+///
+/// Retains user-authored text (plus inline attachments), `@file` slices, and changed non-empty
+/// terminal snapshots for the 4-turn freshness window without storing transient per-turn
+/// identity, skills, past memories, radar, or `EMPTY`/`NO_CHANGE` snapshot blocks.
+#[must_use]
+pub(crate) fn build_settled_user_history_text(
+    annotated_prompt: &str,
+    referenced_files_block: &str,
+    final_snapshot_text: &str,
+) -> String {
+    let mut out = annotated_prompt.to_string();
+    let refs = referenced_files_block.trim();
+    if !refs.is_empty() {
+        out.push_str("\n\n");
+        out.push_str(refs);
+    }
+    let snap = final_snapshot_text.trim();
+    if !snap.is_empty()
+        && snap != super::snapshot::SNAPSHOT_EMPTY_MARKER
+        && snap != super::snapshot::SNAPSHOT_NO_CHANGE_MARKER
+    {
+        out.push_str("\n\nTerminal Snapshot:\n```\n");
+        out.push_str(final_snapshot_text);
+        out.push_str("\n```");
+    }
+    out
+}
+
 /// Returns `true` if `msg` is the start of a real user exchange (contains user text,
 /// is not a tool-result continuation, and is not a synthetic checkpoint/roundtable header).
 #[must_use]
@@ -78,7 +108,9 @@ pub fn is_exchange_start(msg: &Message) -> bool {
             let trimmed = text.trim_start();
             !trimmed.is_empty()
                 && !trimmed.starts_with(SESSION_CHECKPOINT_PREFIX)
+                && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
                 && !trimmed.starts_with("[ROUNDTABLE TURN")
+                && !trimmed.starts_with("[COLLABORATIVE HANDOFF")
         })
 }
 
@@ -166,6 +198,7 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
                             if !cleaned.is_empty()
                                 && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
                                 && !cleaned.starts_with("[ROUNDTABLE TURN")
+                                && !cleaned.starts_with("[COLLABORATIVE HANDOFF")
                             {
                                 flush_entry(
                                     &mut entries,
@@ -234,6 +267,7 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
                         let body = strip_speaker_tag(raw_text).trim();
                         if !body.is_empty()
                             && body != SESSION_CHECKPOINT_ACK
+                            && body != WHILE_YOU_SLEPT_ACK
                             && body != "[SILENT_ACK]"
                             && body != "[Previous task was interrupted by the user]"
                             && body != "[Listening to the roundtable conversation]"
@@ -396,7 +430,11 @@ pub fn prepare_settled_history_for_speaker(
             && content
                 .first()
                 .and_then(rig::message::UserContent::as_text)
-                .is_some_and(|t| t.trim_start().starts_with("[ROUNDTABLE TURN"))
+                .is_some_and(|t| {
+                    let trimmed = t.trim_start();
+                    trimmed.starts_with("[ROUNDTABLE TURN")
+                        || trimmed.starts_with("[COLLABORATIVE HANDOFF")
+                })
         {
             return false;
         }
@@ -410,7 +448,11 @@ pub fn prepare_settled_history_for_speaker(
         content
             .iter()
             .filter_map(rig::message::UserContent::as_text)
-            .any(|t| !t.trim_start().starts_with(SESSION_CHECKPOINT_PREFIX))
+            .any(|t| {
+                let trimmed = t.trim_start();
+                !trimmed.starts_with(SESSION_CHECKPOINT_PREFIX)
+                    && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
+            })
     };
 
     let total_user_msgs = final_history
@@ -1094,5 +1136,28 @@ mod tests {
         } else {
             panic!("Expected steered user text in checkpoint");
         }
+
+        // Settled history builder strips EMPTY/NO_CHANGE snapshots while keeping real snapshots & @file refs,
+        // and `[WHILE_YOU_SLEPT]` + `WHILE_YOU_SLEPT_ACK` preserves alternation without counting toward 4-turn eviction.
+        let settled_empty = build_settled_user_history_text(
+            "Check status",
+            "",
+            super::super::snapshot::SNAPSHOT_EMPTY_MARKER,
+        );
+        assert_eq!(settled_empty, "Check status");
+        let settled_changed =
+            build_settled_user_history_text("Check status", ref_block.trim(), "$ cargo check\nok");
+        assert!(settled_changed.contains("REFERENCED FILES"));
+        assert!(settled_changed.contains("$ cargo check\nok"));
+
+        let sleep_history = vec![
+            user("[WHILE_YOU_SLEPT]\n$ cargo check (exit: 0)"),
+            asst(WHILE_YOU_SLEPT_ACK),
+            user("Next prompt"),
+        ];
+        let prepared_sleep = prepare_query_history(sleep_history, 0);
+        assert_eq!(prepared_sleep.len(), 2);
+        assert!(matches!(prepared_sleep[0], Message::User { .. }));
+        assert!(matches!(prepared_sleep[1], Message::Assistant(_)));
     }
 }

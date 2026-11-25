@@ -53,11 +53,9 @@ impl SkillRegistry {
             .unwrap_or_default();
         *skills.write().await = initial_skills.clone();
 
-        // Initial sync to DB
-        let db_clone_init = db.clone();
-        tokio::spawn(async move {
-            let _ = Self::sync_to_db(db_clone_init, initial_skills).await;
-        });
+        // Sync to SQLite before returning so Turn-1 FTS5 skill lookup (`search_relevant_skills`)
+        // never races ahead of initial skill indexing on a fresh database.
+        let _ = Self::sync_to_db(db.clone(), initial_skills).await;
 
         // Setup file watcher
         let mut watcher = None;

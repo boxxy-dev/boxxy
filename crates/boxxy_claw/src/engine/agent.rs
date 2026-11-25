@@ -57,6 +57,7 @@ impl AgentHook for InFlightTranscriptHook {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.messages = Some(committed);
+            guard.active_status = Some("Thinking…".to_string());
         }
         async { CompletionCallAction::Continue }
     }
@@ -490,10 +491,22 @@ impl ClawAgent {
                                 })
                                 .await;
                         }
+                        Ok(rig::agent::MultiTurnStreamItem::ToolResult { .. }) => {
+                            composing_reply = false;
+                            set_in_flight_status("Thinking…".to_string());
+                            let _ = sctx
+                                .tx_ui
+                                .send(ClawEngineEvent::TurnTraceProgress {
+                                    agent_name: sctx.agent_name.clone(),
+                                    character_id: sctx.character_id.clone(),
+                                    item: None,
+                                    active_status: Some("Thinking…".to_string()),
+                                })
+                                .await;
+                        }
                         Ok(
                             rig::agent::MultiTurnStreamItem::ModelTurnRetried { .. }
-                            | rig::agent::MultiTurnStreamItem::ToolCall { .. }
-                            | rig::agent::MultiTurnStreamItem::ToolResult { .. },
+                            | rig::agent::MultiTurnStreamItem::ToolCall { .. },
                         ) => {
                             composing_reply = false;
                         }

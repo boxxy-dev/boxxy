@@ -150,5 +150,6 @@ pub fn configure_mock_llm_endpoint(endpoint_name: &str, base_url: &str) {
         s.character_models.clear();
         s.vibe_trusted_dirs.clear();
         s.user_profile.display_name.clear();
+        s.disabled_skills = boxxy_preferences::Settings::default().disabled_skills;
     });
 }

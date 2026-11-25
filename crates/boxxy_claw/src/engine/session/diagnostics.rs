@@ -46,7 +46,7 @@ impl ClawSession {
                 Some(self.session_id.clone()),
                 Some(self.name.clone()),
                 current_dir.clone(),
-                Some(last_cmd),
+                Some(last_cmd.clone()),
                 Some(snapshot.clone()),
             )
             .await;
@@ -65,6 +65,17 @@ impl ClawSession {
         }
 
         let mut state_lock = self.state.lock().await;
+        if state_lock.status == crate::engine::AgentStatus::Sleep {
+            let trimmed_cmd = last_cmd.trim();
+            if !trimmed_cmd.is_empty() {
+                if state_lock.sleep_commands.len() >= 64 {
+                    state_lock.sleep_commands.remove(0);
+                }
+                state_lock
+                    .sleep_commands
+                    .push((trimmed_cmd.to_string(), exit_code));
+            }
+        }
         if let Some(reply) = state_lock.pending_terminal_reply.take() {
             state_lock.pending_proposal_summary = None;
             state_lock.pending_inject_command = false;

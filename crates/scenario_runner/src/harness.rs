@@ -55,9 +55,12 @@ impl TestWorkspace {
             .tempdir()
             .context("create TestWorkspace TempDir")?;
 
-        // Ensure custom BLACKLIST.md rules from an earlier test in the same binary do not carry over.
+        // Ensure custom BLACKLIST.md and custom skills from an earlier test do not carry over.
         let blacklist_file = config_root.join("boxxyclaw").join("BLACKLIST.md");
         let _ = tokio::fs::remove_file(&blacklist_file).await;
+        let skills_dir = config_root.join("boxxyclaw").join("skills");
+        let _ = tokio::fs::remove_dir_all(&skills_dir).await;
+        boxxy_claw::registry::skills::reload_if_initialized().await;
 
         let agent_state = AgentState::new();
         let claw_subsystem = ClawSubsystem::new(agent_state.clone());
@@ -137,6 +140,24 @@ impl TestWorkspace {
             tokio::fs::create_dir_all(parent).await?;
         }
         tokio::fs::write(&path, rules_markdown).await?;
+        Ok(path)
+    }
+
+    /// Writes a synthetic skill package (`<config_dir>/boxxyclaw/skills/<slug>/SKILL.md`)
+    /// and reloads `SkillRegistry` if already initialized.
+    ///
+    /// # Errors
+    /// Returns an error if creating the skill directory or writing `SKILL.md` fails.
+    pub async fn write_skill(&self, slug: &str, skill_markdown: &str) -> Result<PathBuf> {
+        let dir = self
+            .config_root()
+            .join("boxxyclaw")
+            .join("skills")
+            .join(slug);
+        tokio::fs::create_dir_all(&dir).await?;
+        let path = dir.join("SKILL.md");
+        tokio::fs::write(&path, skill_markdown).await?;
+        boxxy_claw::registry::skills::reload_if_initialized().await;
         Ok(path)
     }
 
@@ -222,6 +243,9 @@ impl TestWorkspace {
         global_workspace().await.reset_all().await;
         self.claims.clear();
         set_active_claims(Vec::new());
+        let skills_dir = self.config_root().join("boxxyclaw").join("skills");
+        let _ = tokio::fs::remove_dir_all(&skills_dir).await;
+        boxxy_claw::registry::skills::reload_if_initialized().await;
         let _ = ensure_isolated_config_root();
     }
 }

@@ -116,6 +116,13 @@ async fn follow_up_queue_concurrent_btw_and_abort_parking_workflow() {
         "/btw must reuse warm in_flight_snapshot containing settled mid-turn file_read output"
     );
     assert!(
+        btw_reqs[0]
+            .flattened_message_text()
+            .contains("completed so far in this turn: 1 read; currently active step: Thinking…"),
+        "settled tool batch must reset active_status to Thinking… rather than stale Reading file…:\n{}",
+        btw_reqs[0].flattened_message_text()
+    );
+    assert!(
         ws.file_path("src/config.rs").exists(),
         "ForbidToolsHook must prevent /btw from executing file_delete"
     );

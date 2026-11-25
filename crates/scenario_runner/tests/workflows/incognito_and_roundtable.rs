@@ -144,7 +144,20 @@ async fn roundtable_debate_perspective_flips_peer_messages_and_honors_turn_limit
     // 2. Niko's opening reply must be perspective-flipped into a `user` role `[Character Niko Una said]:` block,
     //    never left as an `assistant` message that would cause persona bleed!
     let reqs = ws.llm.main_requests();
+    assert!(
+        reqs[0]
+            .conversation_text()
+            .contains("inside **Niko Una**'s overlay"),
+        "Round 0 roundtable context must use canonical Host display name 'Niko Una':\n{}",
+        reqs[0].conversation_text()
+    );
     let levi_req = &reqs[1];
+    assert!(
+        !levi_req
+            .conversation_text()
+            .contains("--- ROUNDTABLE / MULTI-CHARACTER OVERLAY CHAT ---"),
+        "Autonomous roundtable handoffs must not duplicate the full ROUNDTABLE rules block twice"
+    );
     let levi_sys = levi_req.system_prompt_text();
     assert!(
         levi_sys.contains("--- CHARACTER ROLE ---"),

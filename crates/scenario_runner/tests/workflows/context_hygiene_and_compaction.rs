@@ -65,8 +65,10 @@ async fn context_hygiene_snapshot_dedup_external_edits_clip_and_compaction_workf
     );
     let t1_conv = reqs_t1[0].conversation_text();
     assert!(
-        t1_conv.contains("Pane Alias: `pane-1`") && t1_conv.contains("Swarm Petname: `e2e-agent-1`"),
-        "## YOUR IDENTITY must include Pane Alias and Swarm Petname"
+        t1_conv.contains("Agent Name: **Niko Una** (`@niko-una`)")
+            && t1_conv.contains("Pane Alias: `pane-1`")
+            && t1_conv.contains("Swarm Petname: `e2e-agent-1`"),
+        "## YOUR IDENTITY must include canonical Character title/slug, Pane Alias, and Swarm Petname:\n{t1_conv}"
     );
     assert!(
         !t1_conv.contains("\n\n\n\n"),
@@ -224,6 +226,18 @@ async fn context_hygiene_snapshot_dedup_external_edits_clip_and_compaction_workf
             assert_eq!(
                 candidate.unwrap().content,
                 "Strict header validation"
+            );
+            let persisted = store
+                .get_session(pane.session_id())
+                .await
+                .expect("query session")
+                .expect("session row");
+            let hist_json = persisted.history_json.as_deref().unwrap_or_default();
+            assert!(
+                !hist_json.contains("## YOUR IDENTITY")
+                    && !hist_json.contains("[TERMINAL_SNAPSHOT: NO_CHANGE]")
+                    && !hist_json.contains("[TERMINAL_SNAPSHOT: EMPTY]"),
+                "persisted sessions.history_json must settle user messages without transient turn bloat"
             );
             break;
         }

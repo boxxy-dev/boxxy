@@ -258,8 +258,7 @@ impl ClawSession {
             let agent_name = self.name.clone();
             let character_id = self.character_id.clone();
             let sleep_timestamp = state_lock.sleep_timestamp.take();
-            let db_cell = self.db.clone();
-            let session_id = self.session_id.clone();
+            let sleep_commands = std::mem::take(&mut state_lock.sleep_commands);
             let tx_self = self.tx_self.clone();
             drop(state_lock);
 
@@ -275,8 +274,7 @@ impl ClawSession {
             // Spawn the Dreamer Task
             let task_handle = tokio::spawn(async move {
                 crate::engine::summarization::wake::summarize_wake_delta(
-                    db_cell,
-                    session_id,
+                    sleep_commands,
                     sleep_timestamp,
                     tx_self,
                 )
@@ -290,6 +288,7 @@ impl ClawSession {
         let entering_sleep = req.target_state == crate::engine::AgentStatus::Sleep;
         if entering_sleep {
             state_lock.sleep_timestamp = Some(chrono::Utc::now().timestamp_millis());
+            state_lock.sleep_commands.clear();
         }
 
         state_lock.status = req.target_state.clone();

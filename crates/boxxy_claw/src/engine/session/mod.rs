@@ -89,6 +89,9 @@ pub struct SessionState {
     pub parent_id: Option<uuid::Uuid>,
     pub is_headless: bool,
     pub sleep_timestamp: Option<i64>,
+    /// Shell commands `(command_line, exit_code)` observed while in `AgentStatus::Sleep`,
+    /// drained on Hard Wake (`summarize_wake_delta`) so `[WHILE_YOU_SLEPT]` reflects real delta.
+    pub sleep_commands: Vec<(String, i32)>,
     pub awaiting_tasks: Vec<uuid::Uuid>,
     pub tx_self: async_channel::Sender<ClawMessage>,
     pub mcp_handle: Option<std::sync::Arc<boxxy_mcp::manager::McpClientManager>>,
@@ -249,6 +252,7 @@ impl ClawSession {
                 parent_id: None,
                 is_headless: false,
                 sleep_timestamp: None,
+                sleep_commands: Vec::new(),
                 awaiting_tasks: Vec::new(),
                 tx_self: tx.clone(),
                 mcp_handle: None,
@@ -361,6 +365,8 @@ impl ClawSession {
                 | ClawMessage::SleepToggle(_)
                 | ClawMessage::Abort
                 | ClawMessage::TurnFinished
+                | ClawMessage::WakeSummaryComplete { .. }
+                | ClawMessage::WatchdogTimeout { .. }
                 | ClawMessage::ClawQuery { .. }
                 | ClawMessage::UserMessage { .. }
                 | ClawMessage::FileWriteReply { .. }
@@ -493,5 +499,17 @@ mod tests {
                 request_id: Some(id)
             } if id == req_id
         ));
+
+        // `WakeSummaryComplete` and `WatchdogTimeout` MUST also bypass `backlog` while
+        // `current_turn_active` is `true` so Hard Wake (`summarize_wake_delta`) never deadlocks!
+        tx.send(ClawMessage::WakeSummaryComplete {
+            result: Ok(String::new()),
+        })
+        .await
+        .unwrap();
+        let wake_done = ClawSession::get_next_msg(&rx, &mut urgent_backlog, &mut backlog, true)
+            .await
+            .expect("WakeSummaryComplete must bypass backlog while Dreamer task is active");
+        assert!(matches!(wake_done, ClawMessage::WakeSummaryComplete { .. }));
     }
 }

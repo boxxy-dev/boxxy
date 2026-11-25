@@ -522,7 +522,8 @@ impl RoundtableState {
             Other participants in this conversation: {}.\n\
             Original Topic / Context: {}\n\
             INSTRUCTIONS FOR YOUR TURN:\n\
-            - Respond directly in your own character's voice (**{}**) to **{}** (`@{}`) and the user.\n\
+            - Speak ONLY as **{}** (`@{}`) in your own distinct personality and technical role — NEVER write lines for other characters, NEVER prefix your reply with `[Character ... said]:`, and do NOT call `invite_character` for participants already in the room.\n\
+            - Respond directly to **{}** (`@{}`) and the user (use inline code or ` ```text ` blocks for example commands unless executing a command right now).\n\
             {}",
             round_badge,
             speaker.display_name,
@@ -538,6 +539,7 @@ impl RoundtableState {
                 &self.topic
             },
             next_speaker.display_name,
+            next_speaker.slug,
             speaker.display_name,
             speaker.slug,
             style_instructions,
@@ -608,12 +610,17 @@ pub fn speaker_from_info(
         })
         .map(|c| c.holder_id.clone());
 
-    let display_name = if info.config.name.contains('-') {
-        format_character_title(&info.config.name)
-    } else if !info.config.display_name.trim().is_empty() {
-        format_character_title(&info.config.display_name)
+    let from_slug = format_character_title(&info.config.name);
+    let from_disp = format_character_title(&info.config.display_name);
+    let is_slug_prefix = from_slug.len() > from_disp.len()
+        && from_slug
+            .get(..from_disp.len())
+            .is_some_and(|prefix| prefix.eq_ignore_ascii_case(&from_disp))
+        && from_slug.as_bytes().get(from_disp.len()) == Some(&b' ');
+    let display_name = if from_disp.is_empty() || is_slug_prefix {
+        from_slug
     } else {
-        format_character_title(&info.config.name)
+        from_disp
     };
 
     SpeakerIdentity {
@@ -622,6 +629,33 @@ pub fn speaker_from_info(
         slug: info.config.name.clone(),
         is_guest: info.config.id != host_character_id,
         home_pane_id,
+    }
+}
+
+/// Resolves the canonical `SpeakerIdentity` for a pane's Host character from `catalog`
+/// (falling back to `fallback_name` for transient workers or `/incognito`).
+#[must_use]
+pub fn resolve_host_speaker(
+    character_id: &str,
+    fallback_name: &str,
+    catalog: &[CharacterInfo],
+) -> SpeakerIdentity {
+    if !character_id.is_empty()
+        && let Some(info) = catalog.iter().find(|c| c.config.id == character_id)
+    {
+        let mut spk = speaker_from_info(info, character_id, "");
+        spk.is_guest = false;
+        spk.home_pane_id = None;
+        return spk;
+    }
+
+    let slug = fallback_name.to_lowercase().replace(' ', "-");
+    SpeakerIdentity {
+        character_id: character_id.to_string(),
+        display_name: fallback_name.to_string(),
+        slug,
+        is_guest: false,
+        home_pane_id: None,
     }
 }
 
@@ -965,6 +999,30 @@ mod tests {
 
         let s3 = resolve_speaker_token("@kuro,", "id-niko", "pane-1", &cat).unwrap();
         assert_eq!(s3.character_id, "id-kuro");
+
+        // `resolve_host_speaker` expands short first-name `display_name` (`"niko"` -> `"Niko Una"`)
+        // while preserving distinct multi-word `display_name`s on custom characters.
+        let mut custom_cat = cat;
+        custom_cat[0].config.display_name = "niko".to_string();
+        let resolved_niko = resolve_host_speaker("id-niko", "niko", &custom_cat);
+        assert_eq!(resolved_niko.display_name, "Niko Una");
+        assert_eq!(resolved_niko.slug, "niko-una");
+
+        custom_cat.push(CharacterInfo::new(
+            CharacterConfig {
+                id: "id-custom".to_string(),
+                name: "nyx".to_string(),
+                display_name: "Lady Nyx".to_string(),
+                color: "#22aacc".to_string(),
+                duties: "Archivist".to_string(),
+                personality: "Calm".to_string(),
+                greetings: Vec::new(),
+            },
+            false,
+        ));
+        let resolved_custom = resolve_host_speaker("id-custom", "nyx", &custom_cat);
+        assert_eq!(resolved_custom.display_name, "Lady Nyx");
+        assert_eq!(resolved_custom.slug, "nyx");
     }
 
     #[test]
