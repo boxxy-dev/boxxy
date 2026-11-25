@@ -18,7 +18,7 @@ pub use diff::{
     DiffCell, DiffHunk, DiffKind, DiffLineKind, DiffPairRow, DiffSpan, DiffStats, FileDiff,
     MAX_DIFF_LINE_CHARS, MAX_DIFF_RENDER_ROWS,
 };
-pub use environment::{ClawEnvironment, ProcessSample};
+pub use environment::{ClawEnvironment, ProcessSample, extract_last_command_from_snapshot};
 pub use messages::{ClawEngineEvent, ClawMessage, ImageAttachmentMeta, QueuedPromptSummary};
 pub use rows::PersistentClawRow;
 pub use slash::{SlashCommand, SlashSubmitEffect, classify_submit_effect};

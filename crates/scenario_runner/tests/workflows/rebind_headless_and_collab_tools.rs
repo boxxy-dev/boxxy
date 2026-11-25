@@ -255,9 +255,12 @@ async fn phantom_swarm_headless_worker_and_live_pane_rebind_with_detached_radar_
     host.wait_ready(TIMEOUT).await.expect("host ready");
 
     // Script the Phantom Swarm headless worker on `ws.llm`:
-    ws.llm.push_step(MockStep::text(
-        "Headless Worker Audit: 0 unsafe blocks in `src/engine.rs`.",
-    ));
+    // Have the headless worker execute a real relative `file_read("src/engine.rs")` tool call
+    // first so we verify it inherited the parent workspace CWD rather than `"/"`!
+    ws.llm.push_steps([
+        MockStep::tool_call("file_read", &json!({ "path": "src/engine.rs" })),
+        MockStep::text("Headless Worker Audit: 0 unsafe blocks in `src/engine.rs`."),
+    ]);
 
     // Script Host (`Niko Una`) on `leader_llm`:
     leader_llm.push_steps([
@@ -318,9 +321,11 @@ async fn phantom_swarm_headless_worker_and_live_pane_rebind_with_detached_radar_
     );
 
     // Audit 2: Headless worker received its `RUST_UNSAFE_AUDITOR_PROFILE` in SYSTEM PROMPT
-    //          (never overwritten by `ensure_initialized`) and wrote ZERO ghost sessions to SQLite!
+    //          (never overwritten by `ensure_initialized`), inherited the parent workspace `CWD`
+    //          (successfully reading relative `src/engine.rs`), observed clean `GLOBAL RADAR`
+    //          (`[Full Context]` and `Last command \`idle\``), and wrote ZERO ghost sessions to SQLite!
     let headless_reqs = ws.llm.main_requests();
-    assert_eq!(headless_reqs.len(), 1);
+    assert_eq!(headless_reqs.len(), 2);
     assert!(
         headless_reqs[0]
             .system_prompt_text()
@@ -328,9 +333,25 @@ async fn phantom_swarm_headless_worker_and_live_pane_rebind_with_detached_radar_
         "headless worker system prompt must retain its custom profile:\n{}",
         headless_reqs[0].system_prompt_text()
     );
+    let ws_dir_str = ws.path().to_string_lossy().into_owned();
+    let headless_t1_conv = headless_reqs[0].conversation_text();
     assert!(
-        headless_reqs[0].conversation_text().contains("(Worker "),
+        headless_t1_conv.contains("(Worker "),
         "headless worker identity must preserve Worker display name"
+    );
+    assert!(
+        headless_t1_conv.contains(&format!("CWD: `{ws_dir_str}`")),
+        "headless worker must inherit parent workspace CWD instead of `/`: \n{headless_t1_conv}"
+    );
+    assert!(
+        headless_t1_conv.contains("Last command `idle` | Status: Waiting [Full Context]"),
+        "GLOBAL RADAR must report parent pane `[Full Context]` without leaking user prompts into `Last command`:\n{headless_t1_conv}"
+    );
+    assert!(
+        headless_reqs[1]
+            .conversation_text()
+            .contains("pub fn step() -> usize { 1 }"),
+        "headless worker relative file_read(\"src/engine.rs\") must succeed against inherited CWD"
     );
 
     let store = Store::new(ws.db.pool());

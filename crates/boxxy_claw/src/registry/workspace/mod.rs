@@ -510,9 +510,9 @@ impl WorkspaceRegistry {
                     let cmd = peer
                         .last_command
                         .as_deref()
-                        .map(str::trim)
+                        .map(sanitize_radar_command)
                         .filter(|s| !s.is_empty())
-                        .unwrap_or("idle");
+                        .unwrap_or_else(|| "idle".to_string());
                     let is_agent = peer.tx.is_some() || peer.session_id.is_some();
                     if is_agent {
                         let status = peer
@@ -596,6 +596,19 @@ pub(super) fn normalize_lock_resource(resource: &str) -> String {
         trimmed = rest;
     }
     trimmed.trim_end_matches('/').to_string()
+}
+
+fn sanitize_radar_command(raw: &str) -> String {
+    let single_line = raw
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ");
+    if single_line.len() <= 120 {
+        single_line
+    } else {
+        let cut = single_line.floor_char_boundary(120);
+        format!("{}…", &single_line[..cut])
+    }
 }
 
 fn normalize_agent_key(s: &str) -> String {

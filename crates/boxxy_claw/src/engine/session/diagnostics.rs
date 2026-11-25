@@ -7,15 +7,29 @@ use super::ClawSession;
 
 impl ClawSession {
     /// Returns `true` if a non-zero exit code represents a normal non-error outcome
-    /// (such as `SIGINT`/`SIGQUIT` or `grep`/`diff`/`test`/`[` returning 1).
+    /// (such as `SIGINT`/`SIGQUIT` or `grep`/`rg`/`diff`/`test`/`[` returning 1).
     pub(super) fn should_ignore_exit_code(exit_code: i32, snapshot: &str) -> bool {
         if exit_code == 0 || exit_code == 130 || exit_code == 131 {
             return true;
         }
         if exit_code == 1 {
-            let cmd = snapshot.lines().next().unwrap_or("");
-            let first_word = cmd.split_whitespace().next().unwrap_or("");
-            if matches!(first_word, "grep" | "diff" | "test" | "[") {
+            let cmd = boxxy_claw_protocol::extract_last_command_from_snapshot(snapshot);
+            let first_word = cmd
+                .split_whitespace()
+                .find(|tok| {
+                    // Skip leading `VAR=val` inline environment assignments before the binary name.
+                    !tok.split_once('=').is_some_and(|(k, _)| {
+                        !k.is_empty()
+                            && k.bytes()
+                                .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+                            && !k.bytes().next().unwrap_or(b'0').is_ascii_digit()
+                    })
+                })
+                .unwrap_or("");
+            if matches!(
+                first_word,
+                "grep" | "egrep" | "fgrep" | "rg" | "diff" | "test" | "[" | "[["
+            ) {
                 return true;
             }
         }
@@ -39,14 +53,16 @@ impl ClawSession {
         *current_dir = cwd.clone();
 
         let workspace = crate::registry::workspace::global_workspace().await;
-        let last_cmd = snapshot.lines().next().unwrap_or("").to_string();
+        let last_cmd =
+            boxxy_claw_protocol::extract_last_command_from_snapshot(&snapshot).to_string();
+        let cmd_opt = (!last_cmd.is_empty()).then_some(last_cmd.clone());
         workspace
             .update_pane_state(
                 self.pane_id.clone(),
                 Some(self.session_id.clone()),
                 Some(self.name.clone()),
                 current_dir.clone(),
-                Some(last_cmd.clone()),
+                cmd_opt,
                 Some(snapshot.clone()),
             )
             .await;
@@ -188,5 +204,25 @@ impl ClawSession {
                 vec![],
             ));
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ignores_benign_exit_codes_across_osc133_semantic_and_plain_snapshots() {
+        let osc133_grep = "\n[PROMPT]\n```text\nuser@host:~/proj$ \n```\n\n[COMMAND]\n```bash\ncargo build\n```\n\n[OUTPUT]\n```text\nFinished\n```\n\n[PROMPT]\n```text\nuser@host:~/proj$ \n```\n\n[COMMAND]\n```bash\nLC_ALL=C grep missing_symbol src/lib.rs\n```\n\n[OUTPUT]\n```text\n```";
+        assert!(ClawSession::should_ignore_exit_code(1, osc133_grep));
+
+        let osc133_rg = "\n[PROMPT]\n```text\n$ \n```\n\n[COMMAND]\n```bash\nrg needle crates/\n```\n\n[OUTPUT]\n```text\n```";
+        assert!(ClawSession::should_ignore_exit_code(1, osc133_rg));
+
+        // Real error (`exit 2` on grep syntax/missing file, or `cargo check` exit 1/101) must NOT be ignored
+        assert!(!ClawSession::should_ignore_exit_code(2, osc133_grep));
+        let osc133_cargo_fail = "\n[COMMAND]\n```bash\ncargo test\n```\n\n[OUTPUT]\n```text\ntest failed\n```";
+        assert!(!ClawSession::should_ignore_exit_code(1, osc133_cargo_fail));
+        assert!(ClawSession::should_ignore_exit_code(130, osc133_cargo_fail));
     }
 }

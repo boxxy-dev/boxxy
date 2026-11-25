@@ -101,7 +101,7 @@ pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, Strin
     }
 
     if !active_skills.is_empty() {
-        active_skills_text.push_str("\n--- ACTIVE SKILLS ---\n");
+        active_skills_text.push_str("--- ACTIVE SKILLS ---\n");
         active_skills_text.push_str("These skills are currently loaded and ready to use:\n");
         for skill in &active_skills {
             let _ = writeln!(
@@ -109,8 +109,11 @@ pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, Strin
                 "- {}: {}",
                 skill.frontmatter.name, skill.frontmatter.description
             );
-            active_skills_text.push_str(&skill.content);
-            active_skills_text.push('\n');
+            let body = skill.content.trim();
+            if !body.is_empty() {
+                active_skills_text.push_str(body);
+                active_skills_text.push('\n');
+            }
         }
     }
 
@@ -125,7 +128,7 @@ pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, Strin
         .collect();
 
     if !available_skills.is_empty() {
-        available_skills_text.push_str("\n--- AVAILABLE SKILLS (TOOLBOX - Compact) ---\n");
+        available_skills_text.push_str("--- AVAILABLE SKILLS (TOOLBOX - Compact) ---\n");
         available_skills_text.push_str(
             "Use `activate_skill(name)` if you need the full instructions for any of these:\n",
         );

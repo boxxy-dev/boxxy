@@ -97,6 +97,14 @@ async fn swarm_lock_contention_delegation_and_output_subscription_workflow() {
             && reqs_before_wake[0].conversation_text().contains("pane-2"),
         "Leader's Turn 1 context must include peer `pane-2` in GLOBAL RADAR"
     );
+    let ws_dir_str = ws.path().to_string_lossy().into_owned();
+    assert!(
+        reqs_before_wake[2]
+            .conversation_text()
+            .contains(&format!("CWD: `{ws_dir_str}`")),
+        "newly spawned peer Worker pane must retain workspace CWD across Initialize + delegate_task:\n{}",
+        reqs_before_wake[2].conversation_text()
+    );
     assert!(
         reqs_before_wake[3]
             .conversation_text()

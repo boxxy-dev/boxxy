@@ -185,6 +185,7 @@ impl ClawSession {
                 return;
             }
 
+            let live_cwd = self.resolve_live_cwd(ctx).await;
             ctx.current_turn = Some(spawn_turn(
                 self.pane_id.clone(),
                 self.session_id.clone(),
@@ -192,7 +193,7 @@ impl ClawSession {
                 &prompt,
                 &snapshot,
                 session_ctx,
-                ctx.current_dir.clone(),
+                live_cwd,
                 false,
                 ctx.env.clone(),
                 self.db.clone(),
@@ -257,6 +258,7 @@ impl ClawSession {
                 return;
             }
 
+            let live_cwd = self.resolve_live_cwd(ctx).await;
             ctx.current_turn = Some(spawn_turn(
                 self.pane_id.clone(),
                 self.session_id.clone(),
@@ -264,7 +266,7 @@ impl ClawSession {
                 &prompt,
                 &snapshot,
                 session_ctx,
-                ctx.current_dir.clone(),
+                live_cwd,
                 false,
                 ctx.env.clone(),
                 self.db.clone(),
@@ -305,12 +307,7 @@ impl ClawSession {
             .get_pane_snapshot(self.pane_id.clone())
             .await
             .unwrap_or_default();
-        let cwd = ctx
-            .workspace
-            .get_pane_cwd(self.pane_id.clone())
-            .await
-            .unwrap_or_else(|| ctx.current_dir.clone());
-        ctx.current_dir.clone_from(&cwd);
+        let cwd = self.resolve_live_cwd(ctx).await;
         self.ensure_session_persisted(&cwd).await;
 
         self.send_ui(ClawEngineEvent::UserMessage {

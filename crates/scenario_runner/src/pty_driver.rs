@@ -217,6 +217,46 @@ impl PtyShellSession {
         }
     }
 
+    /// Waits without polling until at least `expected_completions` `OSC 133;D;<exit_code>` markers
+    /// have arrived on the PTY stream, returning `(semantic_snapshot, latest_exit_code)`.
+    ///
+    /// # Errors
+    /// Returns a timeout error if `expected_completions` is not reached within `timeout`.
+    pub async fn wait_for_osc133_done(
+        &self,
+        expected_completions: usize,
+        timeout: Duration,
+    ) -> Result<(String, i32)> {
+        let deadline = tokio::time::Instant::now() + timeout;
+        loop {
+            let notified = self.output_notify.notified();
+            {
+                let (semantic, exits) = self.semantic_snapshot_and_exits();
+                if exits.len() >= expected_completions
+                    && let Some(&last_exit) = exits.last()
+                {
+                    return Ok((semantic, last_exit));
+                }
+            }
+            tokio::time::timeout_at(deadline, notified)
+                .await
+                .map_err(|_| {
+                    anyhow!(
+                        "Timed out after {timeout:?} waiting for {expected_completions} OSC 133;D completions.\nCaptured so far:\n{:?}",
+                        self.output_lossy()
+                    )
+                })?;
+        }
+    }
+
+    /// Parses the captured PTY byte stream into `boxxy-vte`'s structured `OSC 133` semantic
+    /// markdown format (`[PROMPT]`, `[COMMAND]`, `[OUTPUT]`) and returns all observed `OSC 133;D`
+    /// exit codes in chronological order.
+    #[must_use]
+    pub fn semantic_snapshot_and_exits(&self) -> (String, Vec<i32>) {
+        parse_osc133_semantic_stream(&self.output_lossy())
+    }
+
     /// Enables or disables background persistence on `PtyRegistry` for this PTY.
     pub async fn set_persistence(&self, enabled: bool) {
         self.registry.set_persistence(self.pid, enabled).await;
@@ -365,4 +405,104 @@ fn spawn_ui_reader(
             }
         }
     }))
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SemanticZone {
+    None,
+    Prompt,
+    Command,
+    Output,
+}
+
+fn close_zone(out: &mut String, zone: &mut SemanticZone) {
+    if *zone != SemanticZone::None {
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        out.push_str("```\n");
+        *zone = SemanticZone::None;
+    }
+}
+
+fn open_zone(out: &mut String, zone: &mut SemanticZone, next: SemanticZone) {
+    if *zone == next {
+        return;
+    }
+    close_zone(out, zone);
+    match next {
+        SemanticZone::None => {}
+        SemanticZone::Prompt => out.push_str("\n[PROMPT]\n```text\n"),
+        SemanticZone::Command => out.push_str("\n[COMMAND]\n```bash\n"),
+        SemanticZone::Output => out.push_str("\n[OUTPUT]\n```text\n"),
+    }
+    *zone = next;
+}
+
+fn parse_osc133_semantic_stream(raw: &str) -> (String, Vec<i32>) {
+    let bytes = raw.as_bytes();
+    let mut out = String::new();
+    let mut exits = Vec::new();
+    let mut zone = SemanticZone::None;
+    let mut i = 0usize;
+
+    while i < bytes.len() {
+        if bytes[i] == 0x1b {
+            if bytes.get(i + 1) == Some(&b']') {
+                // OSC sequence: `\x1b] ... (\x07 | \x1b\\)`
+                let payload_start = i + 2;
+                let mut end = payload_start;
+                let mut next_i = bytes.len();
+                while end < bytes.len() {
+                    if bytes[end] == 0x07 {
+                        next_i = end + 1;
+                        break;
+                    }
+                    if bytes[end] == 0x1b && bytes.get(end + 1) == Some(&b'\\') {
+                        next_i = end + 2;
+                        break;
+                    }
+                    end += 1;
+                }
+                let osc = &raw[payload_start..end];
+                if let Some(rest) = osc.strip_prefix("133;") {
+                    let kind = rest.split(';').next().unwrap_or("");
+                    match kind {
+                        "A" => open_zone(&mut out, &mut zone, SemanticZone::Prompt),
+                        "B" => open_zone(&mut out, &mut zone, SemanticZone::Command),
+                        "C" => open_zone(&mut out, &mut zone, SemanticZone::Output),
+                        "D" => {
+                            close_zone(&mut out, &mut zone);
+                            let code = rest
+                                .split(';')
+                                .nth(1)
+                                .and_then(|s| s.trim().parse::<i32>().ok())
+                                .unwrap_or(0);
+                            exits.push(code);
+                        }
+                        _ => {}
+                    }
+                }
+                i = next_i;
+                continue;
+            } else if bytes.get(i + 1) == Some(&b'[') {
+                // CSI sequence: `\x1b[ ... <0x40..=0x7E>`
+                let mut end = i + 2;
+                while end < bytes.len() && !(0x40..=0x7e).contains(&bytes[end]) {
+                    end += 1;
+                }
+                i = (end + 1).min(bytes.len());
+                continue;
+            }
+        }
+
+        let ch = raw[i..].chars().next().unwrap_or('\0');
+        if ch != '\r' && ch != '\0' {
+            out.push(ch);
+        }
+        i += ch.len_utf8().max(1);
+    }
+
+    close_zone(&mut out, &mut zone);
+    (out, exits)
 }

@@ -78,12 +78,13 @@ pub(super) async fn run_whats_new_turn(
             );
         }
 
-        let full_prompt = format!("{prompt}\n\n{turn_ctx}");
+        let trimmed_prompt = prompt.trim_end_matches(['\r', '\n']);
+        let full_prompt = format!("{trimmed_prompt}\n\n{turn_ctx}");
         // Store settled user + changelog text without transient `## YOUR IDENTITY` bloat so
         // `sessions.history_json` stays clean while Turn 2-5 follow-ups retain changelog context.
         state_lock
             .history
-            .push(rig::message::Message::user(prompt.clone()));
+            .push(rig::message::Message::user(trimmed_prompt.to_string()));
 
         let h = state_lock.history.clone();
         let l = h.len();

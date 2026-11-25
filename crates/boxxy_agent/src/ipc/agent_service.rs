@@ -376,7 +376,8 @@ impl AgentInterface {
         cwd: String,
     ) {
         let workspace = boxxy_claw::registry::workspace::global_workspace().await;
-        let last_cmd = snapshot.lines().next().unwrap_or("").to_string();
+        let last_cmd =
+            boxxy_claw_protocol::extract_last_command_from_snapshot(&snapshot).to_string();
         let cmd_opt = (!last_cmd.is_empty()).then_some(last_cmd);
         let snap_opt = (!snapshot.is_empty()).then_some(snapshot.clone());
         workspace

@@ -623,7 +623,7 @@ impl ClawSession {
                                     Some(self.session_id.clone()),
                                     Some(self.name.clone()),
                                     ctx.current_dir.clone(),
-                                    Some(effective_query),
+                                    None,
                                     Some(snapshot),
                                 )
                                 .await;
@@ -640,7 +640,7 @@ impl ClawSession {
                         Some(self.session_id.clone()),
                         Some(self.name.clone()),
                         ctx.current_dir.clone(),
-                        Some(effective_query.clone()),
+                        None,
                         Some(snapshot.clone()),
                     )
                     .await;
@@ -1107,6 +1107,27 @@ impl ClawSession {
         .await;
     }
 
+    /// Resolves the live working directory for autonomous or delegated turns (`DelegatedTask`,
+    /// `SubscriptionEvent`, `TaskCompletedEvent`, `ScheduledTaskTriggered`) when `ctx.current_dir`
+    /// has not yet been seeded by a direct user `ClawQuery` on this pane.
+    pub(super) async fn resolve_live_cwd(&self, ctx: &mut RunContext) -> String {
+        if let Some(ws_cwd) = ctx
+            .workspace
+            .get_pane_cwd(self.pane_id.clone())
+            .await
+            .filter(|c| !c.is_empty() && c != "/")
+        {
+            ctx.current_dir.clone_from(&ws_cwd);
+            return ws_cwd;
+        }
+        let state_cwd = self.state.lock().await.current_dir.clone();
+        if !state_cwd.is_empty() && state_cwd != "/" {
+            ctx.current_dir.clone_from(&state_cwd);
+            return state_cwd;
+        }
+        ctx.current_dir.clone()
+    }
+
     pub(super) async fn handle_delegated_task(
         &self,
         ctx: &mut RunContext,
@@ -1132,6 +1153,7 @@ impl ClawSession {
             .get_pane_snapshot(self.pane_id.clone())
             .await
             .unwrap_or_default();
+        let live_cwd = self.resolve_live_cwd(ctx).await;
 
         let catalog = crate::engine::session::roundtable::get_active_catalog();
         let (caller_display_name, caller_character_id) = if let Some(resolved) =
@@ -1179,7 +1201,7 @@ impl ClawSession {
             &full_prompt,
             &snapshot,
             &self.session_context,
-            ctx.current_dir.clone(),
+            live_cwd,
             false,
             ctx.env.clone(),
             self.db.clone(),

@@ -48,6 +48,52 @@ pub trait ClawEnvironment: Send + Sync + 'static {
     }
 }
 
+/// Extracts the most recently executed shell command line from a terminal snapshot.
+///
+/// Supports both structured `boxxy-vte` `OSC 133` semantic snapshots (`[COMMAND]\n```bash\n...``` `)
+/// — where up to 100 lines of scrollback precede the latest command — and plain terminal buffers.
+#[must_use]
+pub fn extract_last_command_from_snapshot(snapshot: &str) -> &str {
+    let mut had_semantic_blocks = false;
+    for (cmd_idx, _) in snapshot.rmatch_indices("[COMMAND]") {
+        had_semantic_blocks = true;
+        let after = &snapshot[cmd_idx + "[COMMAND]".len()..];
+        let mut saw_fence = false;
+        for raw_line in after.lines() {
+            let trimmed = raw_line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            if trimmed.starts_with("```") {
+                if saw_fence {
+                    break;
+                }
+                saw_fence = true;
+                continue;
+            }
+            return trimmed.strip_prefix("$ ").map_or(trimmed, str::trim);
+        }
+    }
+    if had_semantic_blocks || snapshot.contains("[PROMPT]") {
+        return "";
+    }
+
+    for raw_line in snapshot.lines().rev() {
+        if let Some(after_dollar) = raw_line.trim_start().strip_prefix("$ ") {
+            let cmd = after_dollar.trim();
+            if !cmd.is_empty() {
+                return cmd;
+            }
+        }
+    }
+
+    snapshot
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .map_or("", |l| l.strip_prefix("$ ").map_or(l, str::trim))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -68,5 +114,34 @@ mod tests {
         assert!(!json.contains("gpu_usage"));
         let decoded: ProcessSample = serde_json::from_str(&json).unwrap();
         assert_eq!(decoded, sample);
+    }
+
+    #[test]
+    fn extracts_last_command_across_osc133_scrollback_and_plain_snapshots() {
+        // Real Bash integration emits `OSC 133;A` + `OSC 133;B` right after `OSC 133;D`, leaving
+        // a trailing empty `[COMMAND]` block at the new cursor prompt.
+        let osc133_snap = "\n[PROMPT]\n```text\nbox$ \n```\n\n[COMMAND]\n```bash\ncargo build\n```\n\n[OUTPUT]\n```text\nFinished dev\n```\n\n[PROMPT]\n```text\nbox$ \n```\n\n[COMMAND]\n```bash\ngrep needle src/parser.rs\n```\n\n[OUTPUT]\n```text\n```\n\n[PROMPT]\n```text\nbox$ \n```\n\n[COMMAND]\n```bash\n```";
+        assert_eq!(
+            extract_last_command_from_snapshot(osc133_snap),
+            "grep needle src/parser.rs"
+        );
+
+        // Fresh prompt with zero executed commands returns `""` (never `"[PROMPT]"`).
+        let fresh_prompt_only = "\n[PROMPT]\n```text\nbox$ \n```\n\n[COMMAND]\n```bash\n```";
+        assert_eq!(extract_last_command_from_snapshot(fresh_prompt_only), "");
+
+        let multi_prompt_plain = "$ echo first\nfirst\n$ diff -u a.txt b.txt\n--- a.txt\n";
+        assert_eq!(
+            extract_last_command_from_snapshot(multi_prompt_plain),
+            "diff -u a.txt b.txt"
+        );
+
+        let bare_two_line = "unknown_cmd --check\nbash: unknown_cmd: not found\n";
+        assert_eq!(
+            extract_last_command_from_snapshot(bare_two_line),
+            "unknown_cmd --check"
+        );
+
+        assert_eq!(extract_last_command_from_snapshot("   \n\n  "), "");
     }
 }

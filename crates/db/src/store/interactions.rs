@@ -1,5 +1,7 @@
 use crate::models::Interaction;
-use crate::store::{SQLITE_BIND_CHUNK_SIZE, Store};
+use crate::store::{
+    SQLITE_BIND_CHUNK_SIZE, Store, normalize_scope, push_scope_filter, push_scope_rank,
+};
 use anyhow::Result;
 use sqlx::QueryBuilder;
 
@@ -129,27 +131,26 @@ impl Store<'_> {
             return Ok(Vec::new());
         }
 
-        let records = sqlx::query_as::<_, Interaction>(
-            r"
-            SELECT
-                m.id, m.session_id, m.project_path, m.content, m.metadata,
-                m.embedding, m.processing_state, m.created_at, m.last_accessed_at
-            FROM interactions_fts f
-            JOIN interactions m ON f.rowid = m.id
-            WHERE interactions_fts MATCH ?
-            ORDER BY
-                CASE WHEN ? IS NOT NULL AND m.project_path = ? THEN 0 ELSE 1 END,
-                bm25(interactions_fts, 1.0, 0.5),
-                m.last_accessed_at DESC
-            LIMIT ?
-            ",
-        )
-        .bind(query)
-        .bind(project_path)
-        .bind(project_path)
-        .bind(limit)
-        .fetch_all(self.pool)
-        .await?;
+        let scope = normalize_scope(project_path);
+        let mut query_builder = QueryBuilder::new(
+            "SELECT m.id, m.session_id, m.project_path, m.content, m.metadata, \
+                    m.embedding, m.processing_state, m.created_at, m.last_accessed_at \
+             FROM interactions_fts f \
+             JOIN interactions m ON f.rowid = m.id \
+             WHERE interactions_fts MATCH ",
+        );
+        query_builder.push_bind(query.to_owned());
+        query_builder.push(" AND ");
+        push_scope_filter(&mut query_builder, "m.project_path", scope);
+        query_builder.push(" ORDER BY ");
+        push_scope_rank(&mut query_builder, "m.project_path", scope);
+        query_builder.push(", bm25(interactions_fts, 1.0, 0.5), m.last_accessed_at DESC LIMIT ");
+        query_builder.push_bind(limit);
+
+        let records: Vec<Interaction> = query_builder
+            .build_query_as::<Interaction>()
+            .fetch_all(self.pool)
+            .await?;
 
         for chunk in records.chunks(SQLITE_BIND_CHUNK_SIZE) {
             let mut builder = QueryBuilder::new(
@@ -247,6 +248,21 @@ mod tests {
             .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].content, "Explaining how Rust traits work");
+
+        // Subdirectory inside `proj_alpha` inherits `proj_alpha`'s interaction, while unrelated `proj_beta` does not leak!
+        let sub_results = store
+            .search_interactions("Rust", Some("proj_alpha/crates/core"), 10)
+            .await
+            .unwrap();
+        assert_eq!(sub_results.len(), 1);
+        assert!(
+            store
+                .search_interactions("web", Some("proj_alpha"), 10)
+                .await
+                .unwrap()
+                .is_empty(),
+            "interactions from unrelated proj_beta must never leak into proj_alpha"
+        );
 
         let embeddings = store
             .get_all_embeddings_for_session(session_id)

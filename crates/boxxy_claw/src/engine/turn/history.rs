@@ -94,7 +94,7 @@ pub(crate) fn build_settled_user_history_text(
     referenced_files_block: &str,
     final_snapshot_text: &str,
 ) -> String {
-    let mut out = annotated_prompt.to_string();
+    let mut out = annotated_prompt.trim_end_matches(['\r', '\n']).to_string();
     let refs = referenced_files_block.trim();
     if !refs.is_empty() {
         out.push_str("\n\n");
@@ -105,9 +105,10 @@ pub(crate) fn build_settled_user_history_text(
         && snap != super::snapshot::SNAPSHOT_EMPTY_MARKER
         && snap != super::snapshot::SNAPSHOT_NO_CHANGE_MARKER
     {
-        out.push_str("\n\nTerminal Snapshot:\n```\n");
-        out.push_str(final_snapshot_text);
-        out.push_str("\n```");
+        out.push_str("\n\n");
+        out.push_str(&super::snapshot::format_terminal_snapshot_block(
+            final_snapshot_text,
+        ));
     }
     out
 }
@@ -614,7 +615,14 @@ pub fn prepare_settled_history_for_speaker(
                                     .filter(|snap_block| {
                                         !snap_block.contains(super::snapshot::SNAPSHOT_NO_CHANGE_MARKER)
                                             && !snap_block.contains(super::snapshot::SNAPSHOT_EMPTY_MARKER)
-                                            && snap_block.trim() != "Terminal Snapshot:\n```\n```"
+                                            && snap_block
+                                                .trim()
+                                                .strip_prefix("Terminal Snapshot:\n")
+                                                .is_some_and(|fenced| {
+                                                    fenced
+                                                        .lines()
+                                                        .any(|l| !l.trim().bytes().all(|b| b == b'`'))
+                                                })
                                     })
                                     .map(str::to_string);
 
@@ -1431,5 +1439,49 @@ mod tests {
             !serialized.contains("[Previous task was interrupted by the user]"),
             "Completed peer tool calls must never emit false user-interruption markers:\n{serialized}"
         );
+    }
+
+    #[test]
+    fn nested_four_backtick_osc133_snapshots_retain_inside_window_and_strip_outside_window() {
+        let osc133_raw = "\n[PROMPT]\n```text\nbox$ \n```\n\n[COMMAND]\n```bash\ncargo test\n```\n\n[OUTPUT]\n```text\ntest result: ok. 8 passed\n```\n";
+        let mut last_hash = None;
+        let processed = super::super::snapshot::process_snapshot(osc133_raw, &mut last_hash);
+        let settled = build_settled_user_history_text("Did tests pass?", "", &processed);
+        assert!(settled.contains("\n\nTerminal Snapshot:\n````\n[PROMPT]\n```text"));
+
+        let history = vec![
+            user(&settled),
+            asst("Turn 1 passed."),
+            user("Turn 2"),
+            asst("Reply 2"),
+            user("Turn 3"),
+            asst("Reply 3"),
+            user("Turn 4"),
+            asst("Reply 4"),
+            user(&settled),
+            asst("Turn 5 passed."),
+            user("Turn 6 current"),
+        ];
+
+        let prepared = prepare_query_history(history, 0);
+
+        // Turn 1 (outside 4-turn window) strips the entire 4-backtick OSC 133 snapshot cleanly
+        if let Message::User { content } = &prepared[0]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert_eq!(t.text, "Did tests pass?");
+        } else {
+            panic!("Expected stripped Turn 1 OSC 133 snapshot");
+        }
+
+        // Turn 5 (inside 4-turn window) retains the full nested OSC 133 `[PROMPT]`/`[COMMAND]`/`[OUTPUT]` blocks
+        if let Message::User { content } = &prepared[8]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert!(t.text.contains("[COMMAND]\n```bash\ncargo test\n```"));
+            assert!(t.text.contains("test result: ok. 8 passed"));
+        } else {
+            panic!("Expected retained Turn 5 OSC 133 snapshot");
+        }
     }
 }

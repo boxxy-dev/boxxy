@@ -656,14 +656,25 @@ impl ClawSession {
         workspace
             .update_pane_skills(self.pane_id.clone(), Vec::new())
             .await;
+        let init_cwd = if current_dir == "/" {
+            String::new()
+        } else {
+            current_dir.to_string()
+        };
         workspace
             .update_pane_state(
                 self.pane_id.clone(),
                 Some(self.session_id.clone()),
                 Some(name.clone()),
-                current_dir.to_string(),
+                init_cwd,
                 None,
                 None,
+            )
+            .await;
+        workspace
+            .set_pane_quality(
+                self.pane_id.clone(),
+                Some(crate::engine::ContextQuality::Full),
             )
             .await;
 

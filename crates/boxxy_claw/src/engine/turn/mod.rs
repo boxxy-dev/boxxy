@@ -260,7 +260,9 @@ pub fn spawn_turn(
         // 1. Build Skills Context & Pre-Load `@file` References (only from user-authored text)
         let (active_skills_text, available_skills_text, triggered_skill_names) =
             skills::build_skills_context(&user_authored_prompt, &pane_id).await;
-        let skills_context = format!("{active_skills_text}{available_skills_text}");
+        let mut skills_context = String::new();
+        append_preamble_section(&mut skills_context, &active_skills_text);
+        append_preamble_section(&mut skills_context, &available_skills_text);
         let resolved_file_refs =
             file_refs::resolve_prompt_file_refs(&user_authored_prompt, &cwd_clone).await;
         let (images_clone, image_meta_clone) = multimodal::merge_and_order_turn_images(
@@ -285,9 +287,9 @@ pub fn spawn_turn(
         if let Ok(detached) = env.list_detached_shells().await
             && !detached.is_empty()
         {
-            radar.push_str("\n\n--- DETACHED BACKGROUND SHELLS ---\n");
-            radar.push_str(
-                "The following terminal sessions are running in the background (detached in boxxy-agent). You can restore any of them into a new tab using `restore_background_shell`:\n",
+            let mut detached_section = String::from(
+                "--- DETACHED BACKGROUND SHELLS ---\n\
+                The following terminal sessions are running in the background (detached in boxxy-agent). You can restore any of them into a new tab using `restore_background_shell`:\n",
             );
             for (pid, _pane_id, idle_secs, shell_cwd, fg_proc, waiting_for_input) in detached {
                 let proc_label = if fg_proc.is_empty() {
@@ -300,11 +302,14 @@ pub fn spawn_turn(
                 } else {
                     ""
                 };
-                radar.push_str(&format!(
-                    "- PID {pid}: `{proc_label}` in `{shell_cwd}` (idle {idle_secs}s){wait_note}\n"
-                ));
+                use std::fmt::Write as _;
+                let _ = writeln!(
+                    detached_section,
+                    "- PID {pid}: `{proc_label}` in `{shell_cwd}` (idle {idle_secs}s){wait_note}"
+                );
             }
-            radar.push_str("----------------------------------");
+            detached_section.push_str("----------------------------------");
+            append_preamble_section(&mut radar, &detached_section);
         }
 
         let mut tui_warning = String::new();
@@ -535,9 +540,8 @@ pub fn spawn_turn(
                 }
             }
 
-            let turn_tail = format!(
-                "\n\n{turn_context}\n\nTerminal Snapshot:\n```\n{final_snapshot_text}\n```"
-            );
+            let snapshot_block = snapshot::format_terminal_snapshot_block(&final_snapshot_text);
+            let turn_tail = format!("\n\n{turn_context}\n\n{snapshot_block}");
             let annotated_prompt = multimodal::annotate_prompt_for_history(
                 &prompt_clone,
                 images_clone.len(),

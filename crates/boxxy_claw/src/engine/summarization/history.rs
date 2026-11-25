@@ -156,7 +156,8 @@ pub async fn flush_history(
         "memory_flush.md",
     );
 
-    let flush_prompt = flush_prompt_template.replace("{{text_to_summarize}}", &text_to_summarize);
+    let flush_prompt =
+        flush_prompt_template.replace("{{text_to_summarize}}", text_to_summarize.trim_end());
 
     let agent = boxxy_ai_core::create_agent(
         claw_model,

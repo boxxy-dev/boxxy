@@ -84,7 +84,8 @@ impl Tool for ActivateSkillTool {
                 success: true,
                 content: format!(
                     "Skill '{}' activated. FULL INSTRUCTIONS:\n\n{}\n\nCRITICAL DIRECTIVE: You have successfully activated this skill. Stop activating skills and proceed immediately to answer the user's prompt using these instructions.",
-                    skill.frontmatter.name, skill.content
+                    skill.frontmatter.name,
+                    skill.content.trim()
                 ),
             }
         } else {

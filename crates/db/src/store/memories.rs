@@ -1,5 +1,7 @@
 use crate::models::{HygieneStats, Memory};
-use crate::store::{SQLITE_BIND_CHUNK_SIZE, Store};
+use crate::store::{
+    SQLITE_BIND_CHUNK_SIZE, Store, normalize_scope, push_scope_filter, push_scope_rank,
+};
 use anyhow::Result;
 use sqlx::QueryBuilder;
 
@@ -160,7 +162,8 @@ impl Store<'_> {
         Ok(records.into_iter().map(|(p,)| p).collect())
     }
 
-    /// Retrieves unverified candidates matching an FTS5 `query`.
+    /// Retrieves unverified candidates matching an FTS5 `query` within `project_path` (including
+    /// ancestor/subdirectory scopes in the same project tree) or `'global'`.
     pub async fn search_provisional_memories(
         &self,
         query: &str,
@@ -171,66 +174,64 @@ impl Store<'_> {
             return Ok(Vec::new());
         }
 
-        let path = project_path.unwrap_or("global");
-        let records = sqlx::query_as::<_, Memory>(
-            r"
-            SELECT
-                m.id, m.key, m.project_path, m.content, m.category, m.verified, m.pinned,
-                m.observation_count, m.confidence_score, m.created_at, m.updated_at,
-                m.last_accessed_at, m.access_count
-            FROM memories_fts f
-            JOIN memories m ON f.rowid = m.id
-            WHERE memories_fts MATCH ?
-              AND m.verified = false
-              AND m.category IN ('candidate', 'extracted')
-            ORDER BY
-                CASE WHEN m.project_path = ? THEN 0 WHEN m.project_path = 'global' THEN 1 ELSE 2 END,
-                bm25(memories_fts, 5.0, 1.0, 0.5),
-                m.updated_at DESC
-            LIMIT ?
-            ",
-        )
-        .bind(query)
-        .bind(path)
-        .bind(limit)
-        .fetch_all(self.pool)
-        .await?;
+        let scope = normalize_scope(project_path);
+        let mut builder = QueryBuilder::new(
+            "SELECT m.id, m.key, m.project_path, m.content, m.category, m.verified, m.pinned, \
+                    m.observation_count, m.confidence_score, m.created_at, m.updated_at, \
+                    m.last_accessed_at, m.access_count \
+             FROM memories_fts f \
+             JOIN memories m ON f.rowid = m.id \
+             WHERE memories_fts MATCH ",
+        );
+        builder.push_bind(query.to_owned());
+        builder.push(" AND m.verified = false AND m.category IN ('candidate', 'extracted') AND ");
+        push_scope_filter(&mut builder, "m.project_path", scope);
+        builder.push(" ORDER BY ");
+        push_scope_rank(&mut builder, "m.project_path", scope);
+        builder.push(", bm25(memories_fts, 5.0, 1.0, 0.5), m.updated_at DESC LIMIT ");
+        builder.push_bind(limit);
+
+        let records: Vec<Memory> = builder
+            .build_query_as::<Memory>()
+            .fetch_all(self.pool)
+            .await?;
 
         Ok(records)
     }
 
     /// Unconditionally retrieves core bootstrap facts (`keys`) alongside verified user
-    /// preferences and manual sync entries scoped to `project_path` or `'global'`.
+    /// preferences and manual sync entries scoped to `project_path` (including ancestor/child
+    /// directories in the same project tree) or `'global'`.
     pub async fn get_bootstrap_memories(
         &self,
         keys: &[&str],
         project_path: Option<&str>,
     ) -> Result<Vec<Memory>> {
-        let path = project_path.unwrap_or("global");
+        let scope = normalize_scope(project_path);
 
         let mut builder = QueryBuilder::new(
             "SELECT id, key, project_path, content, category, verified, pinned, \
                     observation_count, confidence_score, created_at, updated_at, \
                     last_accessed_at, access_count \
              FROM memories \
-             WHERE verified = true AND pinned = false AND (project_path = ",
+             WHERE verified = true AND pinned = false AND ",
         );
-        builder.push_bind(path);
-        builder.push(" OR project_path = 'global') AND (category IN ('preference', 'manual_sync')");
+        push_scope_filter(&mut builder, "project_path", scope);
+        builder.push(" AND (category IN ('preference', 'manual_sync')");
 
         if !keys.is_empty() {
             builder.push(" OR key IN (");
             let mut separated = builder.separated(", ");
             for key in keys {
-                separated.push_bind(key);
+                separated.push_bind((*key).to_owned());
             }
             separated.push_unseparated(")");
         }
-        builder.push(") ORDER BY CASE WHEN project_path = ");
-        builder.push_bind(path);
-        builder.push(" THEN 0 ELSE 1 END, updated_at DESC, key ASC LIMIT 25");
+        builder.push(") ORDER BY ");
+        push_scope_rank(&mut builder, "project_path", scope);
+        builder.push(", updated_at DESC, key ASC LIMIT 25");
 
-        let records = builder
+        let records: Vec<Memory> = builder
             .build_query_as::<Memory>()
             .fetch_all(self.pool)
             .await?;
@@ -260,25 +261,26 @@ impl Store<'_> {
         Ok(memory)
     }
 
-    /// Retrieves memories belonging to `project_path` or `'global'` using the scope index,
+    /// Retrieves memories belonging to `project_path` (or its ancestor/child directories) or `'global'`,
     /// avoiding loading unrelated project scopes during candidate key deduplication.
     pub async fn get_memories_for_scope(&self, project_path: Option<&str>) -> Result<Vec<Memory>> {
-        let path = project_path.unwrap_or("global");
-        let records = sqlx::query_as::<_, Memory>(
-            r"
-            SELECT
-                id, key, project_path, content, category, verified, pinned,
-                observation_count, confidence_score, created_at, updated_at,
-                last_accessed_at, access_count
-            FROM memories
-            WHERE project_path = ? OR project_path = 'global'
-            ORDER BY CASE WHEN project_path = ? THEN 0 ELSE 1 END, key ASC
-            ",
-        )
-        .bind(path)
-        .bind(path)
-        .fetch_all(self.pool)
-        .await?;
+        let scope = normalize_scope(project_path);
+        let mut builder = QueryBuilder::new(
+            "SELECT id, key, project_path, content, category, verified, pinned, \
+                    observation_count, confidence_score, created_at, updated_at, \
+                    last_accessed_at, access_count \
+             FROM memories \
+             WHERE ",
+        );
+        push_scope_filter(&mut builder, "project_path", scope);
+        builder.push(" ORDER BY ");
+        push_scope_rank(&mut builder, "project_path", scope);
+        builder.push(", key ASC");
+
+        let records = builder
+            .build_query_as::<Memory>()
+            .fetch_all(self.pool)
+            .await?;
         Ok(records)
     }
 
@@ -292,65 +294,63 @@ impl Store<'_> {
             return Ok(Vec::new());
         }
 
-        let path = project_path.unwrap_or("global");
-        let records = sqlx::query_as::<_, Memory>(
-            r"
-            SELECT
-                m.id, m.key, m.project_path, m.content, m.category, m.verified, m.pinned,
-                m.observation_count, m.confidence_score, m.created_at, m.updated_at,
-                m.last_accessed_at, m.access_count
-            FROM memories_fts f
-            JOIN memories m ON f.rowid = m.id
-            WHERE memories_fts MATCH ?
-              AND m.verified = true
-              AND m.pinned = false
-            ORDER BY
-                CASE WHEN m.project_path = ? THEN 0 WHEN m.project_path = 'global' THEN 1 ELSE 2 END,
-                bm25(memories_fts, 5.0, 1.0, 0.5),
-                m.access_count DESC,
-                m.updated_at DESC
-            LIMIT ?
-            ",
-        )
-        .bind(query)
-        .bind(path)
-        .bind(limit)
-        .fetch_all(self.pool)
-        .await?;
+        let scope = normalize_scope(project_path);
+        let mut builder = QueryBuilder::new(
+            "SELECT m.id, m.key, m.project_path, m.content, m.category, m.verified, m.pinned, \
+                    m.observation_count, m.confidence_score, m.created_at, m.updated_at, \
+                    m.last_accessed_at, m.access_count \
+             FROM memories_fts f \
+             JOIN memories m ON f.rowid = m.id \
+             WHERE memories_fts MATCH ",
+        );
+        builder.push_bind(query.to_owned());
+        builder.push(" AND m.verified = true AND m.pinned = false AND ");
+        push_scope_filter(&mut builder, "m.project_path", scope);
+        builder.push(" ORDER BY ");
+        push_scope_rank(&mut builder, "m.project_path", scope);
+        builder.push(", bm25(memories_fts, 5.0, 1.0, 0.5), m.access_count DESC, m.updated_at DESC LIMIT ");
+        builder.push_bind(limit);
+
+        let records: Vec<Memory> = builder
+            .build_query_as::<Memory>()
+            .fetch_all(self.pool)
+            .await?;
 
         // `memories_au` is column-scoped to `(key, content, project_path)`, so updating
         // `access_count` and `last_accessed_at` here incurs zero FTS5 re-indexing overhead.
         for chunk in records.chunks(SQLITE_BIND_CHUNK_SIZE) {
-            let mut builder = QueryBuilder::new(
+            let mut update_builder = QueryBuilder::new(
                 "UPDATE memories SET access_count = access_count + 1, last_accessed_at = CURRENT_TIMESTAMP WHERE id IN (",
             );
-            let mut separated = builder.separated(", ");
+            let mut separated = update_builder.separated(", ");
             for mem in chunk {
                 separated.push_bind(mem.id);
             }
             separated.push_unseparated(")");
-            let _ = builder.build().execute(self.pool).await;
+            let _ = update_builder.build().execute(self.pool).await;
         }
 
         Ok(records)
     }
 
     pub async fn get_pinned_memories(&self, project_path: Option<&str>) -> Result<Vec<Memory>> {
-        let path = project_path.unwrap_or("global");
-        let records = sqlx::query_as::<_, Memory>(
-            r"
-            SELECT
-                id, key, project_path, content, category, verified, pinned,
-                observation_count, confidence_score, created_at, updated_at,
-                last_accessed_at, access_count
-            FROM memories
-            WHERE pinned = true AND (project_path = ? OR project_path = 'global')
-            ORDER BY project_path DESC, key ASC
-            ",
-        )
-        .bind(path)
-        .fetch_all(self.pool)
-        .await?;
+        let scope = normalize_scope(project_path);
+        let mut builder = QueryBuilder::new(
+            "SELECT id, key, project_path, content, category, verified, pinned, \
+                    observation_count, confidence_score, created_at, updated_at, \
+                    last_accessed_at, access_count \
+             FROM memories \
+             WHERE pinned = true AND ",
+        );
+        push_scope_filter(&mut builder, "project_path", scope);
+        builder.push(" ORDER BY ");
+        push_scope_rank(&mut builder, "project_path", scope);
+        builder.push(", key ASC");
+
+        let records = builder
+            .build_query_as::<Memory>()
+            .fetch_all(self.pool)
+            .await?;
 
         Ok(records)
     }
@@ -658,5 +658,113 @@ mod tests {
         assert_eq!(stats.deleted_quarantine_noise, 1);
         assert!(store.get_memory_by_key("quarantine_noise", None).await.unwrap().is_none());
         assert!(store.get_memory_by_key("pinned_cand", None).await.unwrap().is_some());
+    }
+
+    #[tokio::test]
+    async fn test_hierarchical_scope_inherits_parent_and_isolates_sibling_projects() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = db.store();
+
+        store
+            .add_memory("global_tool", None, "Uses ripgrep everywhere", Some("preference"), true, false)
+            .await
+            .unwrap();
+        store
+            .add_memory(
+                "alpha_pin",
+                Some("/workspace/alpha_proj"),
+                "Strict clippy lints in alpha",
+                Some("preference"),
+                true,
+                true,
+            )
+            .await
+            .unwrap();
+        store
+            .add_memory(
+                "alpha_fact",
+                Some("/workspace/alpha_proj"),
+                "Alpha build uses mold linker",
+                Some("dreamed"),
+                true,
+                false,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert_dream_candidate(
+                "alpha_cand",
+                Some("/workspace/alpha_proj"),
+                "Alpha port is 9090",
+                0.6,
+            )
+            .await
+            .unwrap();
+
+        // Sibling project sharing a string prefix (`/workspace/alpha_proj_two` vs `/workspace/alpha_proj`)
+        // and completely separate `/workspace/beta_proj` MUST NEVER leak into `/workspace/alpha_proj`.
+        store
+            .add_memory(
+                "sibling_secret",
+                Some("/workspace/alpha_proj_two"),
+                "Sibling build uses lld linker",
+                Some("dreamed"),
+                true,
+                false,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert_dream_candidate(
+                "beta_cand",
+                Some("/workspace/beta_proj"),
+                "Beta port is 7070",
+                0.7,
+            )
+            .await
+            .unwrap();
+
+        // 1. Querying from a subdirectory `/workspace/alpha_proj/crates/sub` inherits alpha_proj + global
+        let sub_scope = Some("/workspace/alpha_proj/crates/sub");
+        let pinned = store.get_pinned_memories(sub_scope).await.unwrap();
+        assert_eq!(pinned.len(), 1);
+        assert_eq!(pinned[0].key, "alpha_pin");
+
+        let boot = store.get_bootstrap_memories(&["os_type"], sub_scope).await.unwrap();
+        assert!(boot.iter().any(|m| m.key == "global_tool"));
+
+        let verified_hits = store.search_memories("linker", sub_scope, 10).await.unwrap();
+        assert_eq!(verified_hits.len(), 1);
+        assert_eq!(verified_hits[0].key, "alpha_fact");
+
+        let cand_hits = store
+            .search_provisional_memories("port", sub_scope, 10)
+            .await
+            .unwrap();
+        assert_eq!(cand_hits.len(), 1);
+        assert_eq!(cand_hits[0].key, "alpha_cand");
+
+        // 2. Querying from `/workspace/beta_proj` isolates out alpha_proj and alpha_proj_two
+        let beta_verified = store
+            .search_memories("linker", Some("/workspace/beta_proj"), 10)
+            .await
+            .unwrap();
+        assert!(beta_verified.is_empty());
+
+        let beta_cands = store
+            .search_provisional_memories("port", Some("/workspace/beta_proj"), 10)
+            .await
+            .unwrap();
+        assert_eq!(beta_cands.len(), 1);
+        assert_eq!(beta_cands[0].key, "beta_cand");
+
+        // 3. Fallback root CWD `"/"` never acts as a wildcard ancestor for `/workspace/...`
+        assert!(
+            store
+                .search_memories("linker", Some("/"), 10)
+                .await
+                .unwrap()
+                .is_empty()
+        );
     }
 }

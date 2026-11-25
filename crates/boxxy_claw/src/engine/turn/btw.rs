@@ -260,7 +260,8 @@ async fn run_btw_query(params: BtwQueryParams) {
         }
         let snap_trimmed = snapshot.trim();
         if !snap_trimmed.is_empty() {
-            let _ = write!(btw_tail, "\n\nTerminal Snapshot:\n```\n{snap_trimmed}\n```");
+            let snap_block = super::snapshot::format_terminal_snapshot_block(snap_trimmed);
+            let _ = write!(btw_tail, "\n\n{snap_block}");
         }
 
         let model_opt = settings.resolve_character_model(&character_id);
@@ -347,8 +348,9 @@ async fn run_btw_query(params: BtwQueryParams) {
                     if !snap_trimmed.is_empty() {
                         let current_hash = super::snapshot::snapshot_hash(&snapshot);
                         if last_snapshot_hash != Some(current_hash) {
-                            let _ =
-                                write!(btw_tail, "\n\nTerminal Snapshot:\n```\n{snap_trimmed}\n```");
+                            let snap_block =
+                                super::snapshot::format_terminal_snapshot_block(snap_trimmed);
+                            let _ = write!(btw_tail, "\n\n{snap_block}");
                         }
                     }
                 }

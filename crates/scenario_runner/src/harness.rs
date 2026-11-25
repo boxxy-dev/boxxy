@@ -181,6 +181,20 @@ impl TestWorkspace {
         pane_id: impl Into<String>,
         character_index: usize,
     ) -> Result<PaneDriver> {
+        let cwd = self.workspace_dir.path().to_path_buf();
+        self.spawn_pane_in_dir(pane_id, character_index, cwd).await
+    }
+
+    /// Spawns a headless `ClawSession` pane bound to `character_index` starting in `cwd`.
+    ///
+    /// # Errors
+    /// Returns an error if the seeded character catalog does not contain `character_index`.
+    pub async fn spawn_pane_in_dir(
+        &mut self,
+        pane_id: impl Into<String>,
+        character_index: usize,
+        cwd: PathBuf,
+    ) -> Result<PaneDriver> {
         let catalog = seeded_catalog();
         let char_info = catalog
             .get(character_index)
@@ -206,7 +220,7 @@ impl TestWorkspace {
             session_id,
             char_info.config.id.clone(),
             char_info.config.display_name.clone(),
-            self.workspace_dir.path().to_path_buf(),
+            cwd,
             Arc::clone(&self.env),
             self.companions.clone(),
         )
