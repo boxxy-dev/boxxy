@@ -81,6 +81,8 @@ impl ClawSession {
         }
 
         let mut state_lock = self.state.lock().await;
+        state_lock.terminal_command_accepted = false;
+        state_lock.pending_unaccepted_inject_cmd = None;
         if state_lock.status == crate::engine::AgentStatus::Sleep {
             let trimmed_cmd = last_cmd.trim();
             if !trimmed_cmd.is_empty() {

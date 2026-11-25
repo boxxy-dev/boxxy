@@ -13,9 +13,7 @@ use crate::engine::tools::workspace::{
 use crate::engine::tools::{ClawApprovalHandler, SysShellTool};
 use crate::engine::{ClawEngineEvent, ClawEnvironment};
 use crate::utils::load_prompt_fallback;
-use boxxy_ai_core::{
-    AiCredentials, ModelContextHook, build_provider_model, configure_agent_builder,
-};
+use boxxy_ai_core::{ModelContextHook, build_provider_model, configure_agent_builder};
 use boxxy_core_toolbox::{
     FileDeleteTool, FileReadTool, FileWriteTool, GetClipboardTool, GetSystemInfoTool,
     GlobSearchTool, GrepSearchTool, HttpFetchTool, KillProcessTool, ListDirectoryTool,
@@ -100,6 +98,8 @@ pub struct ClawAgent {
     agent: Agent,
     provider_name: String,
     model_name: String,
+    pane_id: String,
+    session_id: String,
     pub(crate) config: AgentConfig,
     mcp_statuses: Vec<(String, bool)>,
 }
@@ -109,6 +109,16 @@ impl ClawAgent {
     pub fn matches_config(&self, candidate: &AgentConfig) -> bool {
         &self.config == candidate
             && **boxxy_claw_protocol::characters::MCP_STATUS_CACHE.load() == self.mcp_statuses
+    }
+
+    #[must_use]
+    pub fn matches_session(
+        &self,
+        candidate: &AgentConfig,
+        pane_id: &str,
+        session_id: &str,
+    ) -> bool {
+        self.pane_id == pane_id && self.session_id == session_id && self.matches_config(candidate)
     }
 
     #[must_use]
@@ -625,33 +635,21 @@ pub async fn create_claw_agent(
         }
     };
 
-    let (mut api_keys, mut ollama_url) = {
+    let (ipc_keys, ipc_ollama_url) = {
         let state_lock = state.lock().await;
         let keys = state_lock.api_keys.read().await.clone();
         let url = state_lock.ollama_url.read().await.clone();
         (keys, url)
     };
 
-    // Fallback: if the IPC-pushed credentials are empty (common when the
-    // engine is hosted in the daemon and the UI hasn't called
-    // `update_credentials` yet — e.g. keys are stored in settings.json,
-    // not env vars) fall back to the on-disk settings. This also merges
-    // in provider env vars via `get_effective_api_keys`.
+    // Merge on-disk/env credentials with any IPC-pushed session keys so per-character
+    // overrides and guest roundtable speakers always see every configured provider key.
     let settings_snapshot = boxxy_preferences::Settings::load();
-    let is_usable =
-        |keys: &std::collections::HashMap<String, String>| keys.values().any(|v| !v.is_empty());
-    if !is_usable(&api_keys) {
-        api_keys = settings_snapshot.get_effective_api_keys();
-        if ollama_url.is_empty() {
-            ollama_url = settings_snapshot.ollama_base_url.clone();
-        }
-    }
-
-    let creds = AiCredentials {
-        api_keys,
-        ollama_url,
-        openai_compatible_endpoints: settings_snapshot.openai_compatible_endpoints.clone(),
-    };
+    let creds = crate::engine::agent_config::merge_session_credentials(
+        &settings_snapshot,
+        &ipc_keys,
+        &ipc_ollama_url,
+    );
 
     let approval_handler = std::sync::Arc::new(ClawApprovalHandler {
         tx_ui: tx_ui.clone(),
@@ -1042,6 +1040,8 @@ pub async fn create_claw_agent(
         agent,
         provider_name,
         model_name,
+        pane_id,
+        session_id,
         config: config.clone(),
         mcp_statuses,
     })

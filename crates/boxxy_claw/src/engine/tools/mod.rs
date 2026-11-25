@@ -40,6 +40,15 @@ impl ClawApprovalHandler {
         let json = serde_json::to_string(output).unwrap_or_default();
         self.report_tool_result(tool_name.to_string(), json).await;
     }
+
+    async fn live_pane_id(&self) -> String {
+        let state_pid = self.state.lock().await.pane_id.clone();
+        if state_pid.is_empty() {
+            self.pane_id.clone()
+        } else {
+            state_pid
+        }
+    }
 }
 
 #[async_trait::async_trait]
@@ -95,7 +104,7 @@ impl ApprovalHandler for ClawApprovalHandler {
             crate::engine::persist_visual_event(
                 self.db.clone(),
                 self.session_id.clone(),
-                self.pane_id.clone(),
+                self.live_pane_id().await,
                 &event,
             );
 
@@ -126,7 +135,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         crate::engine::persist_visual_event(
             self.db.clone(),
             self.session_id.clone(),
-            self.pane_id.clone(),
+            self.live_pane_id().await,
             &event,
         );
 
@@ -181,7 +190,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         crate::engine::persist_visual_event(
             self.db.clone(),
             self.session_id.clone(),
-            self.pane_id.clone(),
+            self.live_pane_id().await,
             &event,
         );
 
@@ -217,7 +226,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         crate::engine::persist_visual_event(
             self.db.clone(),
             self.session_id.clone(),
-            self.pane_id.clone(),
+            self.live_pane_id().await,
             &event,
         );
 
@@ -257,7 +266,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         crate::engine::persist_visual_event(
             self.db.clone(),
             self.session_id.clone(),
-            self.pane_id.clone(),
+            self.live_pane_id().await,
             &event,
         );
 
@@ -290,7 +299,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         crate::engine::persist_visual_event(
             self.db.clone(),
             self.session_id.clone(),
-            self.pane_id.clone(),
+            self.live_pane_id().await,
             &event,
         );
 
@@ -324,7 +333,7 @@ impl ApprovalHandler for ClawApprovalHandler {
         crate::engine::persist_visual_event(
             self.db.clone(),
             self.session_id.clone(),
-            self.pane_id.clone(),
+            self.live_pane_id().await,
             &event,
         );
 
@@ -370,7 +379,7 @@ impl ApprovalHandler for ClawApprovalHandler {
             crate::engine::persist_visual_event(
                 self.db.clone(),
                 self.session_id.clone(),
-                self.pane_id.clone(),
+                self.live_pane_id().await,
                 &event,
             );
         }

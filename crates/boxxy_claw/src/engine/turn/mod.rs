@@ -108,6 +108,22 @@ use log::info;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+/// RAII guard that clears `SessionState.in_flight_snapshot` whenever a turn finishes,
+/// errors, or is cancelled mid-await via `JoinHandle::abort()` (e.g. `/stop`, `/undo`,
+/// `SleepToggle(true)`, or interactive `CompleteRunningTerminalCommand`).
+struct InFlightClearGuard {
+    slot: Arc<std::sync::Mutex<crate::engine::session::InFlightSnapshot>>,
+}
+
+impl Drop for InFlightClearGuard {
+    fn drop(&mut self) {
+        self.slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
+    }
+}
+
 pub(crate) fn append_preamble_section(buf: &mut String, section: &str) {
     let trimmed = section.trim();
     if trimmed.is_empty() {
@@ -596,7 +612,7 @@ pub fn spawn_turn(
             effective_preamble,
         );
         let agent = match persistent_agent {
-            Some(agent) if agent.matches_config(&config) => agent,
+            Some(agent) if agent.matches_session(&config, &pane_id, &session_id_clone) => agent,
             _ => match crate::engine::agent::create_claw_agent(
                 &config,
                 &env,
@@ -710,13 +726,14 @@ pub fn spawn_turn(
         };
 
         let start_time = std::time::Instant::now();
-        let stream_res = agent
-            .chat_streaming(query_for_chat, final_history, Some(stream_ctx))
-            .await;
-        in_flight_snapshot
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+        let stream_res = {
+            let _in_flight_guard = InFlightClearGuard {
+                slot: in_flight_snapshot.clone(),
+            };
+            agent
+                .chat_streaming(query_for_chat, final_history, Some(stream_ctx))
+                .await
+        };
 
         match stream_res
         {
@@ -912,6 +929,14 @@ pub fn spawn_turn(
                             &latest_settings.vibe_trusted_dirs,
                         );
                     had_blocking_proposal = !auto_approve;
+                    let short_unaccepted_cmd = (!auto_approve).then(|| {
+                        let first_line = command.lines().next().unwrap_or(&command).trim();
+                        if first_line.len() > 72 {
+                            format!("{}…", &first_line[..first_line.floor_char_boundary(72)])
+                        } else {
+                            first_line.to_string()
+                        }
+                    });
                     let event = ClawEngineEvent::InjectCommand {
                         agent_name: agent_name.clone(),
                         character_id: character_id.clone(),
@@ -923,7 +948,11 @@ pub fn spawn_turn(
                         auto_approve,
                         usage,
                     };
-                    state.lock().await.pending_inject_command = true;
+                    {
+                        let mut state_lock = state.lock().await;
+                        state_lock.pending_inject_command = true;
+                        state_lock.pending_unaccepted_inject_cmd = short_unaccepted_cmd;
+                    }
                     if !is_headless {
                         persist_visual_event(
                             db.clone(),

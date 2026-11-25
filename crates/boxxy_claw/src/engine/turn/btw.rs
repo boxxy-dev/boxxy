@@ -133,16 +133,13 @@ async fn run_btw_query(params: BtwQueryParams) {
         .await;
 
     let settings = boxxy_preferences::Settings::load();
-    let mut effective_keys = api_keys_lock.read().await.clone();
-    if !effective_keys.values().any(|v| !v.is_empty()) {
-        effective_keys = settings.get_effective_api_keys();
-    }
-    let mut effective_ollama = ollama_url_lock.read().await.clone();
-    if effective_ollama.is_empty() {
-        effective_ollama.clone_from(&settings.ollama_base_url);
-    }
-    let creds = boxxy_ai_core::AiCredentials::new(effective_keys, effective_ollama)
-        .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
+    let ipc_keys = api_keys_lock.read().await.clone();
+    let ipc_ollama = ollama_url_lock.read().await.clone();
+    let creds = crate::engine::agent_config::merge_session_credentials(
+        &settings,
+        &ipc_keys,
+        &ipc_ollama,
+    );
 
     let mut prompt_body = String::with_capacity(trimmed_question.len() + 384);
     prompt_body.push_str(BTW_INSTRUCTIONS);
@@ -312,7 +309,11 @@ async fn run_btw_query(params: BtwQueryParams) {
             effective_preamble,
         );
         let claw_agent_res = match cached_claw_agent {
-            Some(agent) if !is_guest_speaker && agent.matches_config(&config) => Ok(agent),
+            Some(agent)
+                if !is_guest_speaker && agent.matches_session(&config, &pane_id, &session_id) =>
+            {
+                Ok(agent)
+            }
             _ => {
                 crate::engine::agent::create_claw_agent(
                     &config,

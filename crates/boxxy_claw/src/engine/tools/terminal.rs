@@ -115,23 +115,6 @@ impl Tool for TerminalCommandTool {
             }
         }
 
-        if let Some(ref target_id) = resolved_target_id {
-            workspace
-                .register_pending_command(target_id.clone(), Some(self.pane_id.clone()), tx)
-                .await;
-            let mut state = self.state.lock().await;
-            let target_lbl = resolved_target_label.as_deref().unwrap_or(target_id);
-            state.pending_proposal_summary = Some(format!(
-                "terminal_exec on {target_lbl} `{}` ({})",
-                args.command, args.explanation
-            ));
-        } else {
-            let mut state = self.state.lock().await;
-            state.pending_terminal_reply = Some(tx);
-            state.pending_proposal_summary =
-                Some(format!("terminal_exec `{}` ({})", args.command, args.explanation));
-        }
-
         let target_cwd = if let Some(ref target_id) = resolved_target_id {
             workspace
                 .get_pane_cwd(target_id.clone())
@@ -148,6 +131,25 @@ impl Tool for TerminalCommandTool {
                 &target_cwd,
                 &settings.vibe_trusted_dirs,
             );
+
+        if let Some(ref target_id) = resolved_target_id {
+            workspace
+                .register_pending_command(target_id.clone(), Some(self.pane_id.clone()), tx)
+                .await;
+            let mut state = self.state.lock().await;
+            state.terminal_command_accepted = auto_approve;
+            let target_lbl = resolved_target_label.as_deref().unwrap_or(target_id);
+            state.pending_proposal_summary = Some(format!(
+                "terminal_exec on {target_lbl} `{}` ({})",
+                args.command, args.explanation
+            ));
+        } else {
+            let mut state = self.state.lock().await;
+            state.pending_terminal_reply = Some(tx);
+            state.terminal_command_accepted = auto_approve;
+            state.pending_proposal_summary =
+                Some(format!("terminal_exec `{}` ({})", args.command, args.explanation));
+        }
 
         if !auto_approve {
             let _ = self
@@ -189,9 +191,11 @@ impl Tool for TerminalCommandTool {
                 let _ = workspace
                     .complete_pending_command(tid, 1, "Failed to dispatch to UI".to_string())
                     .await;
-            } else {
+            }
+            {
                 let mut state = self.state.lock().await;
                 state.pending_terminal_reply = None;
+                state.terminal_command_accepted = false;
                 state.pending_proposal_summary = None;
             }
             return Err(std::io::Error::other(format!(
@@ -200,6 +204,7 @@ impl Tool for TerminalCommandTool {
         }
 
         let result = rx.await;
+        self.state.lock().await.terminal_command_accepted = false;
         let _ = self
             .tx_ui
             .send(ClawEngineEvent::AgentThinking {

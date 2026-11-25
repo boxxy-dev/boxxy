@@ -192,7 +192,17 @@ impl ClawSession {
         if let Some(handle) = ctx.current_turn.take() {
             handle.abort();
             had_active = true;
-            let (thinking_name, thinking_cid) = self.state.lock().await.effective_speaker();
+            let (thinking_name, thinking_cid) = {
+                let mut state_lock = self.state.lock().await;
+                state_lock
+                    .in_flight_snapshot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .clear();
+                state_lock.current_turn_user_images.clear();
+                state_lock.generated_images_this_turn.clear();
+                state_lock.effective_speaker()
+            };
             let _ = self
                 .tx_ui
                 .send(ClawEngineEvent::AgentThinking {
@@ -570,11 +580,18 @@ impl ClawSession {
                 // images were attached; otherwise cancel and start a fresh turn so the model
                 // receives the attached `UserContent::Image` blocks.
                 if allow_steering && image_attachments.is_empty() {
-                    let has_local_pending = self.state.lock().await.has_in_turn_approval();
-                    let has_remote_pending = ctx
-                        .workspace
-                        .has_pending_commands_for_source(&self.pane_id)
-                        .await;
+                    let (has_local_pending, cmd_already_accepted) = {
+                        let state_lock = self.state.lock().await;
+                        (
+                            state_lock.has_in_turn_approval(),
+                            state_lock.terminal_command_accepted,
+                        )
+                    };
+                    let has_remote_pending = !cmd_already_accepted
+                        && ctx
+                            .workspace
+                            .has_pending_commands_for_source(&self.pane_id)
+                            .await;
 
                     if has_local_pending || has_remote_pending {
                         let user_steered =

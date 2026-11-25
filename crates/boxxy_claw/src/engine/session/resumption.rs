@@ -418,6 +418,10 @@ impl ClawSession {
         ) = {
             let mut state_lock = self.state.lock().await;
             state_lock.pane_id.clone_from(&new_pane_id);
+            // Drop the cached agent so tools holding `pane_id` (`AcquireLockTool`,
+            // `ReleaseLockTool`, `SubscribeToPaneTool`, `ActivateSkillTool`, etc.) rebuild
+            // cleanly against `new_pane_id` on the next turn.
+            state_lock.persistent_agent = None;
             if state_lock.status == crate::engine::AgentStatus::Off {
                 state_lock.status = crate::engine::AgentStatus::Waiting;
             }

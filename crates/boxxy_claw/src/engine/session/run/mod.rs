@@ -568,6 +568,7 @@ impl ClawSession {
                 }
             }
             ClawMessage::TerminalCommandAccepted { target_pane_id } => {
+                self.state.lock().await.terminal_command_accepted = true;
                 let effective_target = target_pane_id
                     .filter(|s| !s.is_empty())
                     .unwrap_or_else(|| self.pane_id.clone());
@@ -686,6 +687,7 @@ impl ClawSession {
                     let mut state_lock = self.state.lock().await;
                     let (spk_name, spk_cid) = state_lock.effective_speaker();
                     let _ = state_lock.pending_terminal_reply.take();
+                    state_lock.terminal_command_accepted = false;
                     // Keep `pending_inject_command = true` so if this agent-originated command
                     // later exits with a non-zero status, origin-aware auto-diagnosis still runs.
                     state_lock.pending_inject_command = true;

@@ -89,6 +89,80 @@ async fn origin_aware_error_diagnosis_spends_zero_tokens_until_requested() {
     assert!(auto_diag.contains("missing semicolon"));
     assert_eq!(ws.llm.main_requests().len(), 2);
 
+    // 5. Rejecting an `InjectCommand` (`CancelPending`) spends 0 extra tokens, clears
+    //    `pending_inject_command` so a subsequent user typo is NOT misclassified as agent-owned,
+    //    and records the concise command-rejection note in `SessionState.history` for the next turn!
+    ws.llm.push_steps([
+        MockStep::text("Run the full suite:\n```bash\ncargo test --all\n```"),
+        MockStep::text("Narrowed to unit tests only: `cargo test --lib`."),
+    ]);
+    pane.send_query("Propose running all workspace tests.")
+        .await
+        .expect("send command proposal turn");
+    pane.wait_for_next(TIMEOUT, |ev| match ev {
+        ClawEngineEvent::InjectCommand { command, .. } if command.trim() == "cargo test --all" => {
+            Some(())
+        }
+        _ => None,
+    })
+    .await
+    .expect("InjectCommand for cargo test --all");
+    assert_eq!(ws.llm.main_requests().len(), 3);
+
+    pane.send(ClawMessage::CancelPending)
+        .await
+        .expect("reject InjectCommand");
+    pane.wait_for_next(TIMEOUT, |ev| match ev {
+        ClawEngineEvent::ProposalResolved {
+            approved: false, ..
+        } => Some(()),
+        _ => None,
+    })
+    .await
+    .expect("ProposalResolved(false) on InjectCommand rejection");
+    assert_eq!(
+        ws.llm.main_requests().len(),
+        3,
+        "rejecting InjectCommand must spend 0 extra LLM calls"
+    );
+
+    // A user-typed failure right after rejecting `InjectCommand` must emit only `LazyErrorIndicator` (0 tokens)!
+    pane.notify_command_finished(127, "typoo_cmd\nbash: typoo_cmd: command not found\n")
+        .await
+        .expect("user failure after rejected InjectCommand");
+    pane.wait_for_next(TIMEOUT, |ev| match ev {
+        ClawEngineEvent::LazyErrorIndicator { visible: true, .. } => Some(()),
+        _ => None,
+    })
+    .await
+    .expect("LazyErrorIndicator after rejected InjectCommand");
+    assert_eq!(ws.llm.main_requests().len(), 3);
+
+    // Next user turn sees the concise `[Proposed command `cargo test --all` — rejected by the user]` note!
+    pane.send_query("That suite is too slow — suggest only unit tests.")
+        .await
+        .expect("send follow-up after rejected InjectCommand");
+    let (narrow_reply, _) = pane
+        .wait_for_diagnosis(TIMEOUT)
+        .await
+        .expect("narrow reply");
+    assert!(narrow_reply.contains("cargo test --lib"));
+
+    let final_conv = ws
+        .llm
+        .main_requests()
+        .last()
+        .expect("final req")
+        .conversation_text();
+    assert!(
+        final_conv.contains("[Proposed command `cargo test --all` — rejected by the user]"),
+        "rejected InjectCommand must record concise rejection note in history:\n{final_conv}"
+    );
+    assert!(
+        !final_conv.contains("[Previous task was interrupted by the user]"),
+        "appended InjectCommand rejection note must keep clean User/Assistant alternation:\n{final_conv}"
+    );
+
     pane.shutdown().await;
     ws.teardown().await;
 }

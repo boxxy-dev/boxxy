@@ -286,8 +286,11 @@ async fn phantom_swarm_headless_worker_and_live_pane_rebind_with_detached_radar_
             MockStep::tool_call("await_tasks", &json!({ "task_ids": [task_id] }))
         }),
         MockStep::text("Locked `src/engine.rs`, scheduled reminder, and verified headless audit."),
-        // Turn 2 after `RebindPane`:
-        MockStep::text("Confirmed session rebound cleanly to `pane-rebind-new`."),
+        // Turn 2 after `RebindPane`: release the lock held under `pane-rebind-new` and read `src/engine.rs`
+        // to verify rebuilt tools & `ClawApprovalHandler` bind to `pane-rebind-new` (never `pane-rebind-old`)!
+        MockStep::tool_call("release_lock", &json!({ "resource": "src/engine.rs" })),
+        MockStep::tool_call("file_read", &json!({ "path": "src/engine.rs" })),
+        MockStep::text("Confirmed session rebound cleanly to `pane-rebind-new` and lock released."),
     ]);
 
     host.send_query("Lock `src/engine.rs`, set a reminder, and summon a headless safety auditor.")
@@ -354,7 +357,8 @@ async fn phantom_swarm_headless_worker_and_live_pane_rebind_with_detached_radar_
         "headless worker relative file_read(\"src/engine.rs\") must succeed against inherited CWD"
     );
 
-    let store = Store::new(ws.db.pool());
+    let db = ws.db.clone();
+    let store = Store::new(db.pool());
     let recent_sessions = store
         .get_recent_active_sessions(20)
         .await
@@ -392,6 +396,7 @@ async fn phantom_swarm_headless_worker_and_live_pane_rebind_with_detached_radar_
     }
 
     let _ = host.advance_cursor_to_end();
+    ws.rebind_pane_claim("pane-rebind-old", "pane-rebind-new");
     host.send(ClawMessage::RebindPane {
         new_pane_id: "pane-rebind-new".to_string(),
     })
@@ -440,9 +445,13 @@ async fn phantom_swarm_headless_worker_and_live_pane_rebind_with_detached_radar_
         .expect("RebindPane preserves scheduled tasks");
     assert_eq!(rebound_tasks[0].payload, "Post-Rebind Reminder");
 
-    // 3. Run Turn 2 on the rebound pane and verify `Unique ID: pane-rebind-new` + `Pane Alias: pane-1`
-    //    AND zero lingering headless workers in `GLOBAL RADAR`!
-    host.send_query("Verify everything after moving pane to a new split.")
+    // 3. Run Turn 2 on the rebound pane (`release_lock` + `file_read`) and verify:
+    //    - `ReleaseLockTool` unlocked `src/engine.rs` under `pane-rebind-new` so `host` returns to `Waiting`
+    //      and a peer pane can immediately acquire `src/engine.rs` without stale `LockTable` contention!
+    //    - `Unique ID: pane-rebind-new` + `Pane Alias: pane-1` + `Swarm Petname` are preserved!
+    //    - Newly persisted `claw_events` rows record `pane_id == "pane-rebind-new"`!
+    //    - Completed Phantom Swarm headless worker disappeared from `GLOBAL RADAR`!
+    host.send_query("Release the lock on `src/engine.rs` and verify everything after moving pane.")
         .await
         .expect("send turn 2 after rebind");
     let (turn2_rebound, _) = host
@@ -450,6 +459,18 @@ async fn phantom_swarm_headless_worker_and_live_pane_rebind_with_detached_radar_
         .await
         .expect("turn 2 diagnosis after rebind");
     assert!(turn2_rebound.contains("pane-rebind-new"));
+    host.wait_for_status(&AgentStatus::Waiting, TIMEOUT)
+        .await
+        .expect("rebound pane returned to Waiting after releasing lock");
+
+    let ws_reg = boxxy_claw::registry::workspace::global_workspace().await;
+    ws_reg
+        .acquire_lock("peer-lock-probe".to_string(), "src/engine.rs".to_string())
+        .await
+        .expect("post-rebind release_lock must free src/engine.rs in LockTable for peers");
+    ws_reg
+        .release_lock("peer-lock-probe".to_string(), "src/engine.rs".to_string())
+        .await;
 
     let final_leader_conv = leader_llm
         .main_requests()
@@ -458,13 +479,47 @@ async fn phantom_swarm_headless_worker_and_live_pane_rebind_with_detached_radar_
         .conversation_text();
     assert!(
         final_leader_conv.contains("Unique ID: `pane-rebind-new`")
-            && final_leader_conv.contains("Pane Alias: `pane-1`"),
-        "rebound pane must preserve alias `pane-1` under new Unique ID `pane-rebind-new`:\n{final_leader_conv}"
+            && final_leader_conv.contains("Pane Alias: `pane-1`")
+            && final_leader_conv.contains("Swarm Petname: `e2e-agent-1`"),
+        "rebound pane must preserve alias `pane-1` and petname under new Unique ID `pane-rebind-new`:\n{final_leader_conv}"
     );
     assert!(
         !final_leader_conv.contains("--- GLOBAL RADAR"),
         "completed Phantom Swarm headless worker must auto-reap and disappear from GLOBAL RADAR:\n{final_leader_conv}"
     );
+
+    let post_rebind_deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        let raw_events = store
+            .get_claw_events(host.session_id())
+            .await
+            .unwrap_or_default();
+        let has_rebound_file_read = raw_events.iter().any(|raw| {
+            serde_json::from_str::<PersistentClawRow>(raw).is_ok_and(|row| {
+                matches!(
+                    row,
+                    PersistentClawRow::ToolCall {
+                        pane_id,
+                        tool_name,
+                        ..
+                    } if pane_id == "pane-rebind-new" && tool_name == "file_read"
+                )
+            })
+        });
+        if has_rebound_file_read {
+            assert!(
+                raw_events.iter().all(|raw| !raw.contains("\"file_read\"")
+                    || raw.contains("\"pane-rebind-new\"")),
+                "post-rebind tool events must persist under `pane-rebind-new`, never `pane-rebind-old`"
+            );
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < post_rebind_deadline,
+            "timed out waiting for post-rebind file_read ToolCall persistence"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
 
     drop(pty);
     host.shutdown().await;

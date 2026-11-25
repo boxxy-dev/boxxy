@@ -207,6 +207,30 @@ pub fn format_session_models_banner(
     format_session_models_banner_for_character(settings, "", web_search_local_enabled)
 }
 
+/// Merges on-disk/environment API keys (`Settings::get_effective_api_keys`) with any
+/// non-empty keys pushed to the session over IPC (`state.api_keys`), so per-character
+/// model overrides and guest roundtable speakers always see keys for every configured provider.
+#[must_use]
+pub fn merge_session_credentials<S: std::hash::BuildHasher>(
+    settings: &boxxy_preferences::Settings,
+    ipc_keys: &std::collections::HashMap<String, String, S>,
+    ipc_ollama_url: &str,
+) -> boxxy_ai_core::AiCredentials {
+    let mut keys = settings.get_effective_api_keys();
+    for (provider, key) in ipc_keys {
+        if !key.trim().is_empty() {
+            keys.insert(provider.clone(), key.clone());
+        }
+    }
+    let ollama_url = if ipc_ollama_url.trim().is_empty() {
+        settings.ollama_base_url.clone()
+    } else {
+        ipc_ollama_url.to_string()
+    };
+    boxxy_ai_core::AiCredentials::new(keys, ollama_url)
+        .with_custom_endpoints(settings.openai_compatible_endpoints.clone())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -384,5 +408,32 @@ mod tests {
         let cfg_no_files =
             AgentConfig::from_env_for_character(&no_file_tools, None, false, String::new());
         assert!(!cfg_no_files.character_creator_enabled);
+    }
+
+    #[test]
+    fn merge_session_credentials_preserves_settings_keys_across_providers_and_skips_blanks() {
+        let mut settings = boxxy_preferences::Settings::default();
+        settings
+            .api_keys
+            .insert("Gemini".to_string(), "gem-from-settings".to_string());
+        settings
+            .api_keys
+            .insert("Anthropic".to_string(), "ant-from-settings".to_string());
+        settings.ollama_base_url = "http://127.0.0.1:11434".to_string();
+
+        let mut ipc_keys = std::collections::HashMap::new();
+        ipc_keys.insert("Anthropic".to_string(), "ant-from-ipc".to_string());
+        ipc_keys.insert("Gemini".to_string(), "   ".to_string());
+
+        let merged = merge_session_credentials(&settings, &ipc_keys, "");
+        assert_eq!(
+            merged.api_keys.get("Anthropic").map(String::as_str),
+            Some("ant-from-ipc")
+        );
+        assert_eq!(
+            merged.api_keys.get("Gemini").map(String::as_str),
+            Some("gem-from-settings")
+        );
+        assert_eq!(merged.ollama_url, "http://127.0.0.1:11434");
     }
 }

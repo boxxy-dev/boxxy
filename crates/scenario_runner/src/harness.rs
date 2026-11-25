@@ -241,6 +241,16 @@ impl TestWorkspace {
         .await
     }
 
+    /// Updates an active character claim's `holder_id` in `CLAIMS_CACHE` to mirror daemon pane rebinding.
+    pub fn rebind_pane_claim(&mut self, old_pane_id: &str, new_pane_id: &str) {
+        for claim in &mut self.claims {
+            if claim.holder_id == old_pane_id {
+                new_pane_id.clone_into(&mut claim.holder_id);
+            }
+        }
+        set_active_claims(self.claims.clone());
+    }
+
     /// Spawns a real Linux PTY + `/bin/bash` child wired to this workspace's `PtyRegistry`.
     ///
     /// # Errors

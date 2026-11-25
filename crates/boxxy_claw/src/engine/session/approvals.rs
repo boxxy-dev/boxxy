@@ -7,7 +7,9 @@ impl SessionState {
     /// still alive and will immediately consume the interruption via the tool output,
     /// so the caller must NOT abort or spawn a duplicate turn).
     pub fn drain_pending_with_interruption(&mut self, message: &str) -> bool {
+        self.terminal_command_accepted = false;
         self.pending_inject_command = false;
+        self.pending_unaccepted_inject_cmd = None;
         self.pending_proposal_summary = None;
         let mut fulfilled = false;
         let outcome = ApprovalOutcome::Interrupted(message.to_string());
@@ -48,8 +50,33 @@ impl SessionState {
     /// rejected proposal so the next turn retains context without making an extra LLM call.
     /// Returns `true` if any pending tool approval channel was active and rejected.
     pub fn drain_pending_cancel(&mut self) -> bool {
+        self.terminal_command_accepted = false;
         self.pending_inject_command = false;
-        let mut cancelled = false;
+        let mut cancelled = if let Some(cmd) = self.pending_unaccepted_inject_cmd.take() {
+            let note = format!("\n\n[Proposed command `{cmd}` — rejected by the user]");
+            let mut appended = false;
+            if let Some(rig::message::Message::Assistant(turn)) = self.history.last_mut() {
+                for item in turn.content.iter_mut().rev() {
+                    if let rig::message::AssistantContent::Text(t) = item {
+                        t.text.push_str(&note);
+                        appended = true;
+                        break;
+                    }
+                }
+            }
+            if !appended {
+                let (spk_name, spk_cid) = self.effective_speaker();
+                let tagged = crate::engine::turn::history::tag_assistant_text(
+                    &spk_cid,
+                    &spk_name,
+                    note.trim_start(),
+                );
+                self.history.push(rig::message::Message::assistant(tagged));
+            }
+            true
+        } else {
+            false
+        };
         if let Some(summary) = self.pending_proposal_summary.take() {
             let (spk_name, spk_cid) = self.effective_speaker();
             let note = format!("[Proposed {summary} — rejected by the user]");
@@ -116,7 +143,9 @@ mod pending_drain_tests {
             api_keys: Arc::new(RwLock::new(HashMap::new())),
             ollama_url: Arc::new(RwLock::new(String::new())),
             pending_terminal_reply: None,
+            terminal_command_accepted: false,
             pending_inject_command: false,
+            pending_unaccepted_inject_cmd: None,
             pending_file_reply: None,
             pending_file_delete_reply: None,
             pending_kill_process_reply: None,

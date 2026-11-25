@@ -49,16 +49,13 @@ pub(super) async fn run_incognito_turn(
         )
     };
 
-    let mut effective_keys = api_keys.read().await.clone();
-    if effective_keys.is_empty() {
-        effective_keys = settings.get_effective_api_keys();
-    }
-    let mut effective_ollama = ollama_url.read().await.clone();
-    if effective_ollama.is_empty() {
-        effective_ollama.clone_from(&settings.ollama_base_url);
-    }
-    let creds = boxxy_ai_core::AiCredentials::new(effective_keys, effective_ollama)
-        .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
+    let ipc_keys = api_keys.read().await.clone();
+    let ipc_ollama = ollama_url.read().await.clone();
+    let creds = crate::engine::agent_config::merge_session_credentials(
+        &settings,
+        &ipc_keys,
+        &ipc_ollama,
+    );
 
     let agent = boxxy_ai_core::create_agent_with_config(
         &settings.claw_model,

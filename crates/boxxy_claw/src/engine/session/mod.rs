@@ -49,7 +49,13 @@ pub struct SessionState {
     pub api_keys: Arc<tokio::sync::RwLock<std::collections::HashMap<String, String>>>,
     pub ollama_url: Arc<tokio::sync::RwLock<String>>,
     pub pending_terminal_reply: Option<tokio::sync::oneshot::Sender<Result<String, String>>>,
+    /// True once the current `terminal_exec` proposal has been accepted (or Vibe auto-approved)
+    /// and is actively executing in the terminal, so follow-up prompts enqueue instead of steering.
+    pub terminal_command_accepted: bool,
     pub pending_inject_command: bool,
+    /// Unaccepted `InjectCommand` (` ```bash ` block) awaiting user click on "Accept & Run" or "Reject",
+    /// recorded in `history` if explicitly rejected via `CancelPending` or superseded by a new user prompt.
+    pub pending_unaccepted_inject_cmd: Option<String>,
     pub pending_file_reply:
         Option<tokio::sync::oneshot::Sender<boxxy_core_toolbox::ApprovalOutcome>>,
     pub pending_file_delete_reply:
@@ -158,7 +164,9 @@ impl SessionState {
         self.current_turn_user_images.clear();
         self.pending_lazy_diagnosis = None;
         self.pending_proposal_summary = None;
+        self.terminal_command_accepted = false;
         self.pending_inject_command = false;
+        self.pending_unaccepted_inject_cmd = None;
         self.active_speaker = None;
         self.next_roundtable_turn = None;
         self.roundtable.clear();
@@ -173,10 +181,10 @@ impl SessionState {
             .clear();
     }
 
-    /// Returns true if an in-turn oneshot approval channel is actively blocking the current turn.
+    /// Returns true if an in-turn oneshot approval channel is actively waiting on user consent.
     #[must_use]
     pub const fn has_in_turn_approval(&self) -> bool {
-        self.pending_terminal_reply.is_some()
+        (self.pending_terminal_reply.is_some() && !self.terminal_command_accepted)
             || self.pending_file_reply.is_some()
             || self.pending_file_delete_reply.is_some()
             || self.pending_kill_process_reply.is_some()
@@ -260,7 +268,9 @@ impl ClawSession {
                 api_keys: Arc::new(tokio::sync::RwLock::new(std::collections::HashMap::new())),
                 ollama_url: Arc::new(tokio::sync::RwLock::new(String::new())),
                 pending_terminal_reply: None,
+                terminal_command_accepted: false,
                 pending_inject_command: false,
+                pending_unaccepted_inject_cmd: None,
                 pending_file_reply: None,
                 pending_file_delete_reply: None,
                 pending_kill_process_reply: None,
@@ -419,6 +429,7 @@ impl ClawSession {
                 | ClawMessage::ScrollbackReply { .. }
                 | ClawMessage::SpawnAgentReply { .. }
                 | ClawMessage::TaskCompletedEvent { .. }
+                | ClawMessage::ForegroundProcessChanged { .. }
                 | ClawMessage::CommandFinished { .. }
                 | ClawMessage::RebindPane { .. }
                 | ClawMessage::CancelTask { .. }

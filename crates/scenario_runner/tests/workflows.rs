@@ -15,6 +15,8 @@ mod error_diagnosis;
 mod hotswap_dreaming_and_handoff;
 #[path = "workflows/incognito_and_roundtable.rs"]
 mod incognito_and_roundtable;
+#[path = "workflows/interactive_handoff_and_drama.rs"]
+mod interactive_handoff_and_drama;
 #[path = "workflows/osc133_and_workspace_scoping.rs"]
 mod osc133_and_workspace_scoping;
 #[path = "workflows/persistence_and_resume.rs"]

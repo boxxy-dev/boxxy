@@ -43,14 +43,22 @@ pub struct FileMentionToken {
 pub fn extract_file_mention_tokens(text: &str) -> Vec<FileMentionToken> {
     let mut results = Vec::new();
     let mut seen = HashSet::new();
-    let mut in_fence = false;
+    let mut active_fence_ticks: Option<usize> = None;
 
     for line in text.lines() {
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
+        let trimmed_end = line.trim_end_matches('\r');
+        if let Some(fence_len) = active_fence_ticks {
+            let trimmed = trimmed_end.trim();
+            let ticks = trimmed.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= fence_len && trimmed.len() == ticks {
+                active_fence_ticks = None;
+            }
             continue;
         }
-        if in_fence {
+        let trimmed_start = trimmed_end.trim_start();
+        let ticks = trimmed_start.bytes().take_while(|&b| b == b'`').count();
+        if ticks >= 3 {
+            active_fence_ticks = Some(ticks);
             continue;
         }
 

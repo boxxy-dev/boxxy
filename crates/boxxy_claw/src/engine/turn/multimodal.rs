@@ -78,18 +78,29 @@ fn find_inline_image_matches(
     candidates.sort_by(|a, b| b.1.len().cmp(&a.1.len()).then_with(|| a.0.cmp(&b.0)));
 
     let mut matches: Vec<(usize, usize, usize)> = Vec::new();
-    let mut in_fence = false;
+    let mut active_fence_ticks: Option<usize> = None;
     let mut line_byte_offset = 0usize;
 
     for raw_line in user_head.split_inclusive('\n') {
         let line = raw_line.trim_end_matches(['\r', '\n']);
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
+        if let Some(fence_len) = active_fence_ticks {
+            let trimmed = line.trim();
+            let ticks = trimmed.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= fence_len && trimmed.len() == ticks {
+                active_fence_ticks = None;
+            }
+            line_byte_offset += raw_line.len();
+            continue;
+        }
+        let trimmed_start = line.trim_start();
+        let ticks = trimmed_start.bytes().take_while(|&b| b == b'`').count();
+        if ticks >= 3 {
+            active_fence_ticks = Some(ticks);
             line_byte_offset += raw_line.len();
             continue;
         }
 
-        if !in_fence && !line.is_empty() {
+        if !line.is_empty() {
             for &(img_idx, tok) in &candidates {
                 let is_at_mention = tok.starts_with('@');
                 let mut from = 0usize;

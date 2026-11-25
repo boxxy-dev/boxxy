@@ -881,9 +881,10 @@ pub fn parse_user_roundtable_intent(
         }
     }
 
-    // 3. Check for `@character` mentions anywhere in the user message
+    // 3. Check for `@character` mentions anywhere in the user message (outside fenced code blocks)
+    let unfenced = strip_code_blocks(trimmed);
     let mut mentioned = Vec::new();
-    for mut spk in extract_mentioned_characters(trimmed, "", catalog) {
+    for mut spk in extract_mentioned_characters(&unfenced, "", catalog) {
         spk.is_guest = spk.character_id != host.character_id;
         mentioned.push(spk);
     }
@@ -917,16 +918,25 @@ pub fn parse_user_roundtable_intent(
 
 fn strip_code_blocks(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
-    let mut in_fence = false;
+    let mut active_fence_ticks: Option<usize> = None;
     for line in s.lines() {
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
+        let trimmed_end = line.trim_end_matches('\r');
+        if let Some(fence_len) = active_fence_ticks {
+            let trimmed = trimmed_end.trim();
+            let ticks = trimmed.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= fence_len && trimmed.len() == ticks {
+                active_fence_ticks = None;
+            }
             continue;
         }
-        if !in_fence {
-            out.push_str(line);
-            out.push('\n');
+        let trimmed_start = trimmed_end.trim_start();
+        let ticks = trimmed_start.bytes().take_while(|&b| b == b'`').count();
+        if ticks >= 3 {
+            active_fence_ticks = Some(ticks);
+            continue;
         }
+        out.push_str(line);
+        out.push('\n');
     }
     out
 }
