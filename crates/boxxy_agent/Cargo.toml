@@ -27,7 +27,6 @@ futures-util = { workspace = true }
 uuid = { workspace = true }
 chrono = { workspace = true }
 clap.workspace = true
-notify = { workspace = true }
 notify-debouncer-mini = { workspace = true }
 walkdir = "2.5.0"
 boxxy-telemetry = { path = "../telemetry" }

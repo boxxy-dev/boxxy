@@ -588,12 +588,20 @@ impl GlobalModelSelectorDialog {
         refresh_all_badges();
         sync_global_validation();
 
-        // Escape closes dialog cleanly
+        // Escape closes dialog cleanly, while letting open dropdown/search popovers dismiss first
         {
             let key_ctrl = gtk::EventControllerKey::new();
             let d_esc = dialog.clone();
             key_ctrl.connect_key_pressed(move |_, keyval, _, _| {
                 if keyval == gdk::Key::Escape {
+                    if d_esc
+                        .root()
+                        .and_then(|r| gtk::prelude::RootExt::focus(&r))
+                        .and_then(|w| w.ancestor(gtk::Popover::static_type()))
+                        .is_some()
+                    {
+                        return glib::Propagation::Proceed;
+                    }
                     d_esc.close();
                     glib::Propagation::Stop
                 } else {

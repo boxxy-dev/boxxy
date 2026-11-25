@@ -77,6 +77,7 @@ Background-work status surface. `get_maintenance_status()` returns one of `idle`
 - **`daemon::priority`**: `set_current_thread_nice(19)` wrapper around `setpriority(PRIO_PROCESS, 0, ...)`. Called at the entry of the dreaming task and the zombie sweeper.
 - **`daemon::dreaming`**: daemon-owned driver for the three-phase Dream Cycle. After a 10 s warm-up it sets `niceness 19`, then polls every minute: runs a cycle only when `enable_auto_dreaming` AND `!on_battery` AND `ghost_mode`. 15-minute cooldown between cycles. Publishes its current state into a shared `DreamStatusCell` read by `MaintenanceSubsystem`.
 - **`daemon::singleton`**: implements the name-claim handshake so two agent processes never coexist. The second process either hands off (same version) or upgrades (newer binary).
+- **`character_watcher`**: monitors `<config_dir>/boxxyclaw/characters/` via `notify-debouncer-mini 0.8` + `notify 9.0` (`tokio` unbounded channel handler with zero parked idle `spawn_blocking` threads, `EventKindMask::CORE` kernel-level read exclusion, `DebouncedEventBatch::Rescan` handling, `AnyContinuous` mid-write suppression, symlink-aware `WalkDir` snapshots, and `Watcher::update_paths` + `watched_paths` recovery across atomic directory replacements).
 
 ## Security Posture
 

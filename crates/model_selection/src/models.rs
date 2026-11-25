@@ -1789,6 +1789,14 @@ mod tests {
                 .any(|m| m.api_name() == "gemini-3.6-flash")
         );
 
+        assert!(
+            gemini_all
+                .iter()
+                .any(|m| m.api_name() == "gemini-4-neon")
+        );
+        let gemini_neon = GeminiModel::new("gemini-4-neon");
+        assert!(gemini_neon.supports_thinking());
+
         let gemini_hydrogen = GeminiModel::new("gemini-4-hydrogen");
         assert!(
             gemini_hydrogen

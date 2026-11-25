@@ -233,6 +233,24 @@ row.combo popover > contents {
     padding: 4px;
 }
 
+dropdown > popover.menu > contents .dropdown-searchbar,
+row.combo popover > contents .dropdown-searchbar {
+    padding: 4px 4px 6px 4px;
+    margin-bottom: 2px;
+    background: transparent;
+    border-bottom: var(--boxxy-border-thin) solid alpha(@boxxy_ink, 0.35);
+}
+
+dropdown > popover.menu > contents .dropdown-searchbar searchentry,
+row.combo popover > contents .dropdown-searchbar searchentry {
+    color: @card_fg_color;
+}
+
+dropdown > popover.menu > contents .dropdown-searchbar searchentry image,
+row.combo popover > contents .dropdown-searchbar searchentry image {
+    color: alpha(@card_fg_color, 0.72);
+}
+
 dropdown > popover.menu > contents listview,
 row.combo popover > contents listview,
 popover.menu > contents listview {

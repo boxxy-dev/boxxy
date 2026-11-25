@@ -1,7 +1,7 @@
 # Boxxy-MCP Architecture & Guidelines
 
 ## Component Overview
-The `boxxy-mcp` crate provides a Model Context Protocol (MCP) client integration for Boxxy-Terminal built directly on `rmcp 3.10.0` (supporting the MCP `2026-07-28` specification via `server/discover` as well as `2025-11-25` and earlier servers via `initialize`). It bridges MCP servers (JSON-RPC + JSON Schema Draft 7 / 2020-12) to `rig` (`rig 0.47.0` `DynamicTool`).
+The `boxxy-mcp` crate provides a Model Context Protocol (MCP) client integration for Boxxy-Terminal built directly on `rmcp 3.10.0` (supporting the MCP `2026-07-28` specification via `server/discover` as well as `2025-11-25` and earlier servers via `initialize`). It bridges MCP servers (JSON-RPC + JSON Schema Draft 7 / 2020-12) to `rig` (`rig 0.47.1` `DynamicTool`).
 
 > **Why `rmcp` Directly Instead of `rig-rmcp`:** `rig-rmcp` wraps `rmcp` with legacy `initialize`-only startup (`ProtocolVersion::LATEST_WITH_INITIALIZE`), retires tools permanently on disconnect instead of reconnecting, omits `$schema` / empty-object schema normalization and `FastMCP` deduplication, and provides no pre/post `McpToolObserver` hooks for Boxxy's live Claw indicator pill, sidebar debug rows, and telemetry. `boxxy-mcp` retains direct `rmcp 3.10.0` lifecycle control while incorporating `rig 0.47`'s typed `ToolExecutionError`s, `ToolAnnotations` (serialized safely as `Touches::Writes` on `DynamicTool`), capability checks, and multimodal `ToolOutput` image forwarding.
 

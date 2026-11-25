@@ -1,4 +1,4 @@
-//! Unified multi-provider image generation (`generate_image_with_provider`) built on `rig-core` (`0.47`).
+//! Unified multi-provider image generation (`generate_image_with_provider`) built on `rig-core` (`0.47.1`).
 //!
 //! Bridges character-assigned [`ModelProvider`] credentials onto native image generation endpoints
 //! (`Gemini`, `OpenAI`, `xAI`, `MiniMax`, and `OpenRouter` multimodal chat completions) while

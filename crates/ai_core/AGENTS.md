@@ -1,7 +1,7 @@
 # boxxy-ai-core Agents & Architecture
 
 ## Responsibilities
-Provides Boxxy's unified AI provider abstraction, native ChatGPT / Codex OAuth subscription authentication, catalog/cost resolution, native server-side web search helpers, and `BoxxyAgent` runtime on top of `rig-core` (`0.47`, with `default-features = false, features = ["reqwest", "agent", "rustls"]`). Abstracts ChatGPT (`chatgpt` Codex OAuth subscription), Gemini, Anthropic, OpenAI, DeepSeek, Moonshot, xAI, Z.ai, Mistral, MiniMax, Groq, OpenCode Zen (`opencode`), OpenCode Go (`opencode-go`), OpenRouter, Ollama, and custom `OpenAiCompatible` endpoints (LiteLLM, vLLM, llama.cpp) behind a single cohesive API.
+Provides Boxxy's unified AI provider abstraction, native ChatGPT / Codex OAuth subscription authentication, catalog/cost resolution, native server-side web search helpers, and `BoxxyAgent` runtime on top of `rig-core` (`0.47.1`, with `default-features = false, features = ["reqwest", "agent", "rustls"]`). Abstracts ChatGPT (`chatgpt` Codex OAuth subscription), Gemini, Anthropic, OpenAI, DeepSeek, Moonshot, xAI, Z.ai, Mistral, MiniMax, Groq, OpenCode Zen (`opencode`), OpenCode Go (`opencode-go`), OpenRouter, Ollama, and custom `OpenAiCompatible` endpoints (LiteLLM, vLLM, llama.cpp) behind a single cohesive API.
 
 ## Architecture & Modules
 Organized into focused submodules re-exported from `src/lib.rs`:

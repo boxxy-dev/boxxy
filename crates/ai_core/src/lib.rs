@@ -1,5 +1,5 @@
 //! Unified AI provider abstraction, catalog/cost resolution, native search, and agent runtime
-//! built on `rig-core` (`0.47`).
+//! built on `rig-core` (`0.47.1`).
 
 mod agent;
 mod catalog;

@@ -341,7 +341,14 @@ impl SingleModelSelector {
         model_label.add_css_class("caption");
         model_label.add_css_class("dim-label");
         let model_list = gtk::StringList::new(&[]);
-        let model_dropdown = gtk::DropDown::new(Some(model_list.clone()), None::<&gtk::Expression>);
+        let model_expr = gtk::PropertyExpression::new(
+            gtk::StringObject::static_type(),
+            None::<&gtk::Expression>,
+            "string",
+        );
+        let model_dropdown = gtk::DropDown::new(Some(model_list.clone()), Some(model_expr));
+        model_dropdown.set_enable_search(true);
+        model_dropdown.set_search_match_mode(gtk::StringFilterMatchMode::Substring);
         model_dropdown.set_hexpand(true);
 
         let model_entry = gtk::Entry::builder()
@@ -558,9 +565,10 @@ impl SingleModelSelector {
                 inner.model_dropdown.set_sensitive(false);
             } else {
                 inner.model_dropdown.set_sensitive(true);
+                let mut items: Vec<&str> = Vec::with_capacity(fetched.len() + 1);
                 let mut found_pos = None;
                 for (i, f) in fetched.iter().enumerate() {
-                    inner.model_list.append(f);
+                    items.push(f.as_str());
                     if f == &current_model {
                         found_pos = Some(i as u32);
                     }
@@ -571,12 +579,15 @@ impl SingleModelSelector {
                         && current_model != "Loading..."
                         && current_model != "—"
                     {
-                        inner.model_list.append(&current_model);
+                        items.push(current_model.as_str());
                         found_pos = Some(fetched.len() as u32);
                     } else {
                         found_pos = Some(0);
                     }
                 }
+                inner
+                    .model_list
+                    .splice(0, inner.model_list.n_items(), &items);
                 inner.model_dropdown.set_selected(found_pos.unwrap_or(0));
             }
             inner.apply_thinking_levels(&[], 0);
@@ -684,9 +695,11 @@ impl SingleModelSelector {
                     inner.model_dropdown.set_visible(true);
                     inner.model_dropdown.set_sensitive(true);
                     inner.model_entry.set_visible(false);
-                    for model in prov_def.get_models() {
-                        inner.model_list.append(&model);
-                    }
+                    let models = prov_def.get_models();
+                    let model_refs: Vec<&str> = models.iter().map(String::as_str).collect();
+                    inner
+                        .model_list
+                        .splice(0, inner.model_list.n_items(), &model_refs);
                     inner.model_dropdown.set_selected(0);
                     let levels = prov_def.get_thinking_levels(0);
                     let def_idx = prov_def.default_thinking_idx(0);
@@ -824,10 +837,11 @@ impl SingleModelSelector {
             inner.model_dropdown.set_visible(true);
             inner.model_dropdown.set_sensitive(true);
             inner.model_entry.set_visible(false);
-            inner.model_list.splice(0, inner.model_list.n_items(), &[]);
-            for m in prov_def.get_models() {
-                inner.model_list.append(&m);
-            }
+            let models = prov_def.get_models();
+            let model_refs: Vec<&str> = models.iter().map(String::as_str).collect();
+            inner
+                .model_list
+                .splice(0, inner.model_list.n_items(), &model_refs);
             prov_def.sync_ui(
                 &provider,
                 &inner.model_dropdown,
@@ -878,5 +892,82 @@ impl SingleModelSelector {
 
     pub fn widget(&self) -> &gtk::Box {
         &self.widget
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::{GeminiModel, OpenAiModel, ThinkingLevel};
+    use std::collections::HashMap;
+
+    #[test]
+    fn model_dropdown_enables_substring_search_for_claw_and_dreams_selectors() {
+        if gtk::init().is_err() {
+            return;
+        }
+
+        let mut api_keys = HashMap::new();
+        api_keys.insert("OpenAI".to_string(), "sk-synthetic-test".to_string());
+        api_keys.insert("Gemini".to_string(), "ai-synthetic-test".to_string());
+
+        let shared_ollama = OllamaTagsCache::new("http://127.0.0.1:11434".to_string());
+
+        // 1. Horizontal Default Claw selector (`allow_none = true`)
+        let claw_sel = SingleModelSelector::new_with_options(
+            Some(ModelProvider::OpenAi(
+                OpenAiModel::new("gpt-6.1-terra"),
+                Some(ThinkingLevel::Medium),
+            )),
+            "http://127.0.0.1:11434".to_string(),
+            api_keys.clone(),
+            Vec::new(),
+            SelectorOptions {
+                layout: SelectorLayout::Horizontal,
+                allow_none: true,
+                ollama_cache: Some(shared_ollama.clone()),
+            },
+            |_| {},
+        );
+
+        // 2. Vertical Dreams / Character Override selector (`allow_none = false`)
+        let dreams_sel = SingleModelSelector::new_with_options(
+            Some(ModelProvider::Gemini(
+                GeminiModel::new("gemini-4-neon"),
+                Some(ThinkingLevel::Medium),
+            )),
+            "http://127.0.0.1:11434".to_string(),
+            api_keys,
+            Vec::new(),
+            SelectorOptions {
+                layout: SelectorLayout::Vertical,
+                allow_none: false,
+                ollama_cache: Some(shared_ollama),
+            },
+            |_| {},
+        );
+
+        for sel in [&claw_sel, &dreams_sel] {
+            let inner = sel.inner.borrow();
+            assert!(inner.model_dropdown.enables_search());
+            assert_eq!(
+                inner.model_dropdown.search_match_mode(),
+                gtk::StringFilterMatchMode::Substring
+            );
+            assert!(inner.model_dropdown.expression().is_some());
+            assert!(inner.model_list.n_items() > 1);
+        }
+
+        assert_eq!(
+            claw_sel.get_current_provider(),
+            Some(ModelProvider::OpenAi(
+                OpenAiModel::new("gpt-6.1-terra"),
+                Some(ThinkingLevel::Medium),
+            ))
+        );
+        assert!(matches!(
+            dreams_sel.get_current_provider(),
+            Some(ModelProvider::Gemini(ref m, _)) if m.api_name() == "gemini-4-neon"
+        ));
     }
 }
