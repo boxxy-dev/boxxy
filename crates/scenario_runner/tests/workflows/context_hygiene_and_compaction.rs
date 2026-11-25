@@ -45,8 +45,13 @@ async fn context_hygiene_snapshot_dedup_external_edits_clip_and_compaction_workf
     ]);
 
     let oauth_mention = format!("@{}", oauth_file.display());
+    let big_paste = format!(
+        "sample_context_header\n\n## YOUR IDENTITY\nAgent Name: **SyntheticInnerLog**\n{}",
+        "metric_row = 42;\n".repeat(160)
+    );
+    assert!(big_paste.len() > 2_600);
     pane.send_query(format!(
-        "Check @src/parser.rs and {oauth_mention}, then read `src/large.rs`."
+        "Check @src/parser.rs, [Pasted ~165 lines], and {oauth_mention}, then read `src/large.rs`.\n\n--- ATTACHMENTS ---\n\n**[Pasted ~165 lines]**\n```toml\n{big_paste}```"
     ))
     .await
     .expect("send turn 1");
@@ -112,6 +117,11 @@ async fn context_hygiene_snapshot_dedup_external_edits_clip_and_compaction_workf
         "external edit to tracked file must trigger EXTERNALLY MODIFIED FILES NOTICE"
     );
     assert!(
+        t2_first_conv.contains("Agent Name: **SyntheticInnerLog**")
+            && t2_first_conv.contains("metric_row = 42;"),
+        "fenced --- ATTACHMENTS --- payload must stay intact inside the 4-turn freshness window without truncating at inner ## YOUR IDENTITY"
+    );
+    assert!(
         t2_first_conv.contains("test result: ok. 12 passed"),
         "changed terminal snapshot must be sent in full on Turn 2"
     );
@@ -172,6 +182,10 @@ async fn context_hygiene_snapshot_dedup_external_edits_clip_and_compaction_workf
         "Turn 1 oversized ToolResult must be clipped once outside the 4-turn freshness window"
     );
     assert!(
+        t6_conv.contains("[stale attachment output clipped]"),
+        "Turn 1 oversized --- ATTACHMENTS --- block must be clipped once outside the 4-turn freshness window"
+    );
+    assert!(
         !t6_conv.contains("1: pub fn parse_header() -> bool {\n2:     true"),
         "Turn 1 @file preload must be stripped once outside the 4-turn freshness window"
     );
@@ -212,20 +226,23 @@ async fn context_hygiene_snapshot_dedup_external_edits_clip_and_compaction_workf
     let ws_scope = ws.path().to_string_lossy().into_owned();
     let deadline = tokio::time::Instant::now() + TIMEOUT;
     loop {
-        let saw_flush_req = ws
+        let flush_req = ws
             .llm
             .aux_requests()
-            .iter()
-            .any(|r| r.system_prompt_text().contains("memory extraction system"));
+            .into_iter()
+            .find(|r| r.system_prompt_text().contains("memory extraction system"));
         let candidate = store
             .get_memory_by_key("parser_mode", Some(&ws_scope))
             .await
             .ok()
             .flatten();
-        if saw_flush_req && candidate.is_some() {
-            assert_eq!(
-                candidate.unwrap().content,
-                "Strict header validation"
+        if let (Some(f_req), Some(cand)) = (flush_req, candidate) {
+            assert_eq!(cand.content, "Strict header validation");
+            let flush_conv = f_req.conversation_text();
+            assert!(
+                !flush_conv.contains("--- ATTACHMENTS ---")
+                    && !flush_conv.contains("metric_row = 42;"),
+                "flush_history must strip raw --- ATTACHMENTS --- dumps before calling memory_model:\n{flush_conv}"
             );
             let persisted = store
                 .get_session(pane.session_id())

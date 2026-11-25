@@ -337,12 +337,13 @@ impl ApprovalHandler for ClawApprovalHandler {
 
     async fn report_tool_result(&self, tool_name: String, result: String) {
         let trace_item = boxxy_claw_protocol::tool_result_to_trace_item(&tool_name, &result);
-        let (agent_name, character_id) = {
+        let (agent_name, character_id, is_headless) = {
             let mut state = self.state.lock().await;
             if let Some(ref item) = trace_item {
                 state.current_turn_trace.push(item.clone());
             }
-            state.effective_speaker()
+            let (name, cid) = state.effective_speaker();
+            (name, cid, state.is_headless)
         };
 
         if let Some(item) = trace_item {
@@ -365,12 +366,14 @@ impl ApprovalHandler for ClawApprovalHandler {
             usage: None,
         };
 
-        crate::engine::persist_visual_event(
-            self.db.clone(),
-            self.session_id.clone(),
-            self.pane_id.clone(),
-            &event,
-        );
+        if !is_headless {
+            crate::engine::persist_visual_event(
+                self.db.clone(),
+                self.session_id.clone(),
+                self.pane_id.clone(),
+                &event,
+            );
+        }
 
         let _ = self.tx_ui.send(event).await;
     }

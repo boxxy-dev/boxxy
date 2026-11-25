@@ -1146,21 +1146,24 @@ impl ClawSession {
             (source_agent_name.clone(), String::new())
         };
 
-        let incoming_event = ClawEngineEvent::DiagnosisComplete {
-            agent_name: caller_display_name.clone(),
-            character_id: caller_character_id,
-            diagnosis: prompt.clone(),
-            trace: Vec::new(),
-            usage: None,
-            typewriter: false,
-        };
-        crate::engine::persist_visual_event(
-            self.db.clone(),
-            self.session_id.clone(),
-            self.pane_id.clone(),
-            &incoming_event,
-        );
-        let _ = self.tx_ui.send(incoming_event).await;
+        let is_headless = self.state.lock().await.is_headless;
+        if !is_headless {
+            let incoming_event = ClawEngineEvent::DiagnosisComplete {
+                agent_name: caller_display_name.clone(),
+                character_id: caller_character_id,
+                diagnosis: prompt.clone(),
+                trace: Vec::new(),
+                usage: None,
+                typewriter: false,
+            };
+            crate::engine::persist_visual_event(
+                self.db.clone(),
+                self.session_id.clone(),
+                self.pane_id.clone(),
+                &incoming_event,
+            );
+            let _ = self.tx_ui.send(incoming_event).await;
+        }
 
         let full_prompt = format!("*Task delegated from agent '{caller_display_name}'*: {prompt}");
 

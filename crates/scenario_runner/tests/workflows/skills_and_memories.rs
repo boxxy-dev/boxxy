@@ -32,7 +32,7 @@ async fn skills_semantic_injection_activation_and_memory_recall_workflow() {
 
     ws.write_skill(
         "archive-packager",
-        "---\nname: Archive Packager\ndescription: Create deterministic tarball archives\ntriggers:\n  - tarball\n---\nREPRODUCIBLE_TARBALL_FLAGS: pass --sort=name and --mtime=@0.\n",
+        "---\nname: Archive Packager\ndescription: Create deterministic tarball archives\ntriggers:\n  - tarball\n  - tar\n---\nREPRODUCIBLE_TARBALL_FLAGS: pass --sort=name and --mtime=@0.\n",
     )
     .await
     .expect("write archive-packager skill");
@@ -165,13 +165,23 @@ async fn skills_semantic_injection_activation_and_memory_recall_workflow() {
     );
 
     // Turn 2: Querying about container runtime & registry recalls both the newly `memory_store`d
-    // `preference` fact (under SYSTEM ENVIRONMENT) and the `dreamed` verified fact (via FTS5)!
+    // `preference` fact (under SYSTEM ENVIRONMENT) and the `dreamed` verified fact (via FTS5),
+    // while words like `"social"` / `"starting"` / `"target"` MUST NOT falsely substring-trigger
+    // `oci` or `tar` skills!
     ws.llm
         .push_step(MockStep::text("Using rootless podman and registry.example.com."));
-    pane.send_query("Which container runtime and registry should we use for builds?")
+    pane.send_query(
+        "Which container runtime and registry should we use when starting target builds for social apps?",
+    )
         .await
         .expect("send turn 2");
-    pane.wait_for_diagnosis(TIMEOUT).await.expect("turn 2 done");
+    let (_, trace_2) = pane.wait_for_diagnosis(TIMEOUT).await.expect("turn 2 done");
+    assert!(
+        !trace_2
+            .iter()
+            .any(|t| matches!(t, TurnTraceItem::Skill { name } if name == "Archive Packager")),
+        "substring 'tar' inside 'starting'/'target' must not falsely trigger Archive Packager, got: {trace_2:?}"
+    );
 
     let t2_conv = ws
         .llm
@@ -179,6 +189,10 @@ async fn skills_semantic_injection_activation_and_memory_recall_workflow() {
         .last()
         .expect("turn 2 req")
         .conversation_text();
+    assert!(
+        !t2_conv.contains("--- ACTIVE SKILLS ---\nThese skills are currently loaded and ready to use:\n- Archive Packager"),
+        "word-boundary skill trigger check must prevent false Archive Packager injection on 'starting'/'target'"
+    );
     assert!(
         t2_conv.contains("container_runtime: Prefer rootless podman for local container builds"),
         "memory_store preference from Turn 1 must be injected on Turn 2:\n{t2_conv}"

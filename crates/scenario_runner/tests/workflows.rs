@@ -21,6 +21,8 @@ mod persistence_and_resume;
 mod pty_and_cli;
 #[path = "workflows/queue_btw_and_abort.rs"]
 mod queue_btw_and_abort;
+#[path = "workflows/rebind_headless_and_collab_tools.rs"]
+mod rebind_headless_and_collab_tools;
 #[path = "workflows/skills_and_memories.rs"]
 mod skills_and_memories;
 #[path = "workflows/sleep_and_multimodal.rs"]

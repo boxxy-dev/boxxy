@@ -171,6 +171,46 @@ async fn follow_up_queue_concurrent_btw_and_abort_parking_workflow() {
         "/btw side answers must never be written to claw_events"
     );
 
+    // 4b. Verify `/btw` on a populated IDLE session (`in_flight.messages == None`) sees live
+    //     changed `Terminal Snapshot` and `CWD` in its trailing question while keeping the warm
+    //     `ClawAgent` + `settled_history` prefix intact AND without mutating `last_snapshot_hash`!
+    pane.set_terminal_snapshot("$ cargo build\nerror[E0425]: cannot find value `missing_port`\n")
+        .await;
+    ws.llm.push_btw_step(
+        MockStep::text("Idle /btw answer: `missing_port` is undefined in the latest build.")
+            .with_usage(650, 35),
+    );
+    let idle_btw_id = pane
+        .send_btw("What compiler error just appeared on my terminal screen?")
+        .await
+        .expect("send idle /btw");
+    let idle_btw_ans = pane
+        .wait_for_next(TIMEOUT, |ev| match ev {
+            ClawEngineEvent::BtwComplete {
+                request_id,
+                answer,
+                error: None,
+                ..
+            } if *request_id == idle_btw_id => Some(answer.clone()),
+            _ => None,
+        })
+        .await
+        .expect("idle BtwComplete");
+    assert!(idle_btw_ans.contains("missing_port"));
+
+    let all_btw_reqs = ws.llm.btw_requests();
+    let idle_btw_req = all_btw_reqs.last().expect("idle btw req");
+    assert!(
+        !idle_btw_req.tools.is_empty(),
+        "idle /btw on populated session must keep tool schemas for warm KV prefix-cache hit"
+    );
+    let idle_btw_conv = idle_btw_req.conversation_text();
+    assert!(
+        idle_btw_conv.contains("cannot find value `missing_port`")
+            && idle_btw_conv.contains("CWD: `"),
+        "idle /btw on populated session must include live changed Terminal Snapshot and CWD:\n{idle_btw_conv}"
+    );
+
     // 5. Test `Abort` (`Esc Esc`) parking a queued prompt + alternation continuity bridge!
     let abort_gate = TurnGate::new();
     ws.llm.push_steps([
@@ -226,6 +266,16 @@ async fn follow_up_queue_concurrent_btw_and_abort_parking_workflow() {
     assert!(post_abort_reply.contains("Recovered cleanly"));
 
     let all_main_reqs = ws.llm.main_requests();
+    let turn3_req_after_idle_btw = &all_main_reqs[all_main_reqs.len() - 2];
+    assert!(
+        turn3_req_after_idle_btw
+            .conversation_text()
+            .contains("cannot find value `missing_port`")
+            && !turn3_req_after_idle_btw
+                .conversation_text()
+                .contains("[TERMINAL_SNAPSHOT: NO_CHANGE]"),
+        "ephemeral idle /btw must not mutate last_snapshot_hash before the next real turn"
+    );
     let last_req = all_main_reqs.last().expect("last request");
     assert!(
         last_req

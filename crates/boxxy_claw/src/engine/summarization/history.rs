@@ -53,6 +53,7 @@ pub(crate) fn clean_user_text_for_flush(raw: &str) -> &str {
     }
     let mut end = raw.len();
     for marker in [
+        "\n\n--- ATTACHMENTS ---",
         "\n\n--- UPDATE CHANGELOG CONTEXT ---",
         "\n\n## YOUR IDENTITY",
         "\n\n## CURRENT TURN CONTEXT",
@@ -95,6 +96,7 @@ pub async fn flush_history(
                             let cleaned = clean_user_text_for_flush(&raw_text.text).trim();
                             if !cleaned.is_empty()
                                 && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
+                                && !cleaned.starts_with("[Roundtable handoff]")
                                 && !cleaned.starts_with(
                                     crate::engine::turn::history::SESSION_CHECKPOINT_PREFIX,
                                 )
@@ -126,6 +128,8 @@ pub async fn flush_history(
                     if !trimmed.is_empty()
                         && trimmed != "[SILENT_ACK]"
                         && trimmed != "[Previous task was interrupted by the user]"
+                        && trimmed != "[Completed tool step]"
+                        && trimmed != "[Listening to the roundtable conversation]"
                         && trimmed != crate::engine::turn::history::SESSION_CHECKPOINT_ACK
                         && trimmed != crate::engine::turn::history::WHILE_YOU_SLEPT_ACK
                     {

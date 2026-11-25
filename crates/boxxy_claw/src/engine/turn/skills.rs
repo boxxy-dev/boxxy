@@ -1,5 +1,61 @@
 use std::fmt::Write as _;
 
+/// Checks whether `haystack_lower` contains `trigger_lower` on clean word boundaries
+/// (allowing simple trailing `-s` / `-es` plurals on `>= 3`-char triggers while preventing
+/// substring false positives such as `"oci"` matching `"social"` or `"tar"` matching `"start"`).
+#[must_use]
+fn contains_trigger_phrase(haystack_lower: &str, trigger_lower: &str) -> bool {
+    let needle = trigger_lower.trim();
+    if needle.is_empty() {
+        return false;
+    }
+
+    for (start, _) in haystack_lower.match_indices(needle) {
+        let before_ok = start == 0
+            || haystack_lower[..start]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphanumeric());
+        if !before_ok {
+            continue;
+        }
+
+        let end = start + needle.len();
+        if end >= haystack_lower.len() {
+            return true;
+        }
+
+        let rest = &haystack_lower[end..];
+        let Some(next_ch) = rest.chars().next() else {
+            return true;
+        };
+        if !next_ch.is_alphanumeric() {
+            return true;
+        }
+
+        if needle.len() >= 3 {
+            if next_ch == 's'
+                && rest['s'.len_utf8()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_alphanumeric())
+            {
+                return true;
+            }
+            if rest.starts_with("es")
+                && rest["es".len()..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !c.is_alphanumeric())
+            {
+                return true;
+            }
+        }
+    }
+
+    false
+}
+
 pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, String, Vec<String>) {
     let mut active_skills_text = String::new();
     let mut available_skills_text = String::new();
@@ -15,11 +71,10 @@ pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, Strin
     let all_skills = registry.get_skills().await;
     for skill in &all_skills {
         let triggered = skill.frontmatter.pinned
-            || skill
-                .frontmatter
-                .triggers
-                .iter()
-                .any(|trigger| !trigger.is_empty() && query_lower.contains(&trigger.to_lowercase()));
+            || skill.frontmatter.triggers.iter().any(|trigger| {
+                !trigger.trim().is_empty()
+                    && contains_trigger_phrase(&query_lower, &trigger.to_lowercase())
+            });
 
         if triggered {
             explicitly_triggered.push(skill.frontmatter.name.clone());
@@ -88,4 +143,22 @@ pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, Strin
         available_skills_text,
         explicitly_triggered,
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn trigger_phrase_respects_word_boundaries_and_plurals() {
+        assert!(contains_trigger_phrase("inspect oci-manifest layers", "oci"));
+        assert!(contains_trigger_phrase("pack reproducible tarballs", "tarball"));
+        assert!(contains_trigger_phrase("fix css patches now", "patch"));
+        assert!(contains_trigger_phrase("please report bugs upstream", "report bug"));
+
+        // Substring collisions inside unrelated words must never trigger skills
+        assert!(!contains_trigger_phrase("check social velocity metrics", "oci"));
+        assert!(!contains_trigger_phrase("start the target server", "tar"));
+        assert!(!contains_trigger_phrase("verify digital signature", "git"));
+    }
 }

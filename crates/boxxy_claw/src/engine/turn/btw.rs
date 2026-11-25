@@ -71,6 +71,7 @@ async fn run_btw_query(params: BtwQueryParams) {
         is_incognito,
         in_flight,
         settled_history,
+        last_snapshot_hash,
         pending_proposal_summary,
         recent_trace,
         cached_claw_agent,
@@ -109,6 +110,7 @@ async fn run_btw_query(params: BtwQueryParams) {
             state_lock.incognito,
             in_flight,
             state_lock.history.clone(),
+            state_lock.last_snapshot_hash,
             state_lock.pending_proposal_summary.clone(),
             state_lock.current_turn_trace.clone(),
             state_lock.persistent_agent.clone(),
@@ -332,6 +334,22 @@ async fn run_btw_query(params: BtwQueryParams) {
                     let mut state_lock = state.lock().await;
                     if state_lock.persistent_agent.is_none() {
                         state_lock.persistent_agent = Some(claw_agent.clone());
+                    }
+                }
+                // When `/btw` runs on an idle populated session (`in_flight.messages.is_none()`),
+                // include the live CWD and any changed terminal snapshot in the trailing question
+                // so `system + tools + btw_history` still gets a 100% warm KV prefix-cache hit!
+                if in_flight.messages.is_none() {
+                    if !effective_cwd.is_empty() {
+                        let _ = write!(btw_tail, "\n\nCWD: `{effective_cwd}`");
+                    }
+                    let snap_trimmed = snapshot.trim();
+                    if !snap_trimmed.is_empty() {
+                        let current_hash = super::snapshot::snapshot_hash(&snapshot);
+                        if last_snapshot_hash != Some(current_hash) {
+                            let _ =
+                                write!(btw_tail, "\n\nTerminal Snapshot:\n```\n{snap_trimmed}\n```");
+                        }
                     }
                 }
                 let label = claw_agent.display_model_label();

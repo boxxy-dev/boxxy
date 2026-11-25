@@ -3,15 +3,19 @@ use crate::engine::dispatcher::extract_command_and_clean;
 pub const SNAPSHOT_EMPTY_MARKER: &str = "[TERMINAL_SNAPSHOT: EMPTY]";
 pub const SNAPSHOT_NO_CHANGE_MARKER: &str = "[TERMINAL_SNAPSHOT: NO_CHANGE]";
 
+#[must_use]
+pub(crate) fn snapshot_hash(snapshot: &str) -> u64 {
+    use std::collections::hash_map::DefaultHasher;
+    use std::hash::{Hash, Hasher};
+
+    let mut hasher = DefaultHasher::new();
+    snapshot.hash(&mut hasher);
+    hasher.finish()
+}
+
 pub fn process_snapshot(snapshot: &str, last_snapshot_hash: &mut Option<u64>) -> String {
     // 1. Snapshot Management: Only include if changed to save tokens
-    let current_hash = {
-        use std::collections::hash_map::DefaultHasher;
-        use std::hash::{Hash, Hasher};
-        let mut hasher = DefaultHasher::new();
-        snapshot.hash(&mut hasher);
-        hasher.finish()
-    };
+    let current_hash = snapshot_hash(snapshot);
 
     if snapshot.trim().is_empty() {
         *last_snapshot_hash = Some(current_hash);

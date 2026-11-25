@@ -176,8 +176,11 @@ impl ClawSession {
             return;
         }
 
-        let session_context = load_session_context(&self.character_id);
-        self.session_context = session_context;
+        let is_headless = self.state.lock().await.is_headless;
+        if !is_headless {
+            let session_context = load_session_context(&self.character_id);
+            self.session_context = session_context;
+        }
 
         if let Ok(db) = Db::new().await {
             *self.db.lock().await = Some(db);
@@ -186,8 +189,10 @@ impl ClawSession {
                 self.pane_id, self.name
             );
 
-            let _ = crate::memories::db::sync_markdown_to_db(self.db.clone()).await;
-            let _ = crate::memories::hygiene::run_hygiene(self.db.clone()).await;
+            if !is_headless {
+                let _ = crate::memories::db::sync_markdown_to_db(self.db.clone()).await;
+                let _ = crate::memories::hygiene::run_hygiene(self.db.clone()).await;
+            }
         } else {
             log::error!("Failed to initialize Claw Memory Database.");
         }

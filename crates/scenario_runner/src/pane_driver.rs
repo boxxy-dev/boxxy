@@ -220,6 +220,12 @@ impl PaneDriver {
         &self.pane_id
     }
 
+    /// Updates the local `pane_id` mirror after sending `ClawMessage::RebindPane` so `shutdown()`
+    /// unregisters the rebound pane cleanly.
+    pub fn set_local_pane_id(&mut self, new_pane_id: impl Into<String>) {
+        self.pane_id = new_pane_id.into();
+    }
+
     #[must_use]
     pub fn session_id(&self) -> &str {
         &self.session_id

@@ -142,14 +142,16 @@ pub fn configure_mock_llm_endpoint(endpoint_name: &str, base_url: &str) {
     };
 
     Settings::update(|s| {
-        s.openai_compatible_endpoints
-            .retain(|existing| existing.name != endpoint_name);
-        s.openai_compatible_endpoints.push(ep.clone());
+        s.openai_compatible_endpoints = vec![ep.clone()];
         s.claw_model = Some(claw_provider.clone());
         s.memory_model = Some(memory_provider.clone());
         s.character_models.clear();
         s.vibe_trusted_dirs.clear();
+        s.api_keys.clear();
+        s.enable_web_search = false;
+        s.web_search_on_by_default = false;
         s.user_profile.display_name.clear();
+        s.max_roundtable_turns = boxxy_preferences::Settings::default().max_roundtable_turns;
         s.disabled_skills = boxxy_preferences::Settings::default().disabled_skills;
     });
 }

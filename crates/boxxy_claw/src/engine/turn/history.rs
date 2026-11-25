@@ -11,6 +11,9 @@ pub const UNDO_HISTORY_PREFIX: &str = "[System: The user ran /undo";
 const TRANSCRIPT_CLIP_CHARS: usize = 2_000;
 const TRANSCRIPT_CLIP_SUFFIX: &str =
     "\n...[stale tool output clipped — re-run file_read or grep_search if current contents are needed]";
+const ATTACHMENT_CLIP_SUFFIX: &str = "\n...[stale attachment output clipped]";
+const ROUNDTABLE_HANDOFF_BRIDGE: &str = "[Roundtable handoff]";
+const COMPLETED_TOOL_STEP_BRIDGE: &str = "[Completed tool step]";
 const USER_INTERRUPTION_PREFIX: &str =
     "[USER_INTERRUPTION]: The user did not approve this proposal and instead sent a new instruction: \"";
 const USER_INTERRUPTION_SUFFIX: &str =
@@ -130,6 +133,7 @@ pub fn is_exchange_start(msg: &Message) -> bool {
                 && !trimmed.starts_with(UNDO_HISTORY_PREFIX)
                 && !trimmed.starts_with("[ROUNDTABLE TURN")
                 && !trimmed.starts_with("[COLLABORATIVE HANDOFF")
+                && !trimmed.starts_with(ROUNDTABLE_HANDOFF_BRIDGE)
         })
 }
 
@@ -218,6 +222,7 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
                                 && !cleaned.starts_with("[WHILE_YOU_SLEPT]")
                                 && !cleaned.starts_with("[ROUNDTABLE TURN")
                                 && !cleaned.starts_with("[COLLABORATIVE HANDOFF")
+                                && !cleaned.starts_with(ROUNDTABLE_HANDOFF_BRIDGE)
                             {
                                 flush_entry(
                                     &mut entries,
@@ -289,6 +294,7 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
                             && body != WHILE_YOU_SLEPT_ACK
                             && body != "[SILENT_ACK]"
                             && body != "[Previous task was interrupted by the user]"
+                            && body != COMPLETED_TOOL_STEP_BRIDGE
                             && body != "[Listening to the roundtable conversation]"
                         {
                             let one_line = body.split_whitespace().collect::<Vec<_>>().join(" ");
@@ -406,6 +412,102 @@ fn clip_json_strings_in_place(val: &mut serde_json::Value) {
     }
 }
 
+/// Locates the first `\n\n`-prefixed dynamic context block outside backtick code fences so
+/// pasted logs or markdown inside `--- ATTACHMENTS ---` never prematurely truncate an attachment.
+#[must_use]
+fn find_dynamic_tail_outside_fences(s: &str) -> Option<usize> {
+    const MARKERS: &[&str] = &[
+        "--- UPDATE CHANGELOG CONTEXT ---",
+        "## YOUR IDENTITY",
+        "## CURRENT TURN CONTEXT",
+        "--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---",
+        "--- GLOBAL RADAR",
+        "Terminal Snapshot:\n```",
+    ];
+
+    if !MARKERS.iter().any(|m| s.contains(m)) {
+        return None;
+    }
+
+    let mut offset = 0usize;
+    let mut active_fence_ticks: Option<usize> = None;
+
+    for raw_line in s.split_inclusive('\n') {
+        if active_fence_ticks.is_none() && offset >= 2 && &s[offset - 2..offset] == "\n\n" {
+            let rest = &s[offset..];
+            if MARKERS.iter().any(|m| rest.starts_with(m)) {
+                return Some(offset - 2);
+            }
+        }
+
+        let trimmed_end = raw_line.trim_end_matches(['\r', '\n']);
+        if let Some(fence_len) = active_fence_ticks {
+            let trimmed = trimmed_end.trim();
+            let ticks = trimmed.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= fence_len && trimmed.len() == ticks {
+                active_fence_ticks = None;
+            }
+        } else {
+            let trimmed_start = trimmed_end.trim_start();
+            let ticks = trimmed_start.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= 3 {
+                active_fence_ticks = Some(ticks);
+            }
+        }
+
+        offset += raw_line.len();
+    }
+
+    None
+}
+
+/// Returns the opening backtick count if `s` leaves a fenced code block unclosed.
+#[must_use]
+fn unclosed_fence_ticks(s: &str) -> Option<usize> {
+    let mut active_fence_ticks: Option<usize> = None;
+    for raw_line in s.lines() {
+        let trimmed_end = raw_line.trim_end_matches('\r');
+        if let Some(fence_len) = active_fence_ticks {
+            let trimmed = trimmed_end.trim();
+            let ticks = trimmed.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= fence_len && trimmed.len() == ticks {
+                active_fence_ticks = None;
+            }
+        } else {
+            let trimmed_start = trimmed_end.trim_start();
+            let ticks = trimmed_start.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= 3 {
+                active_fence_ticks = Some(ticks);
+            }
+        }
+    }
+    active_fence_ticks
+}
+
+/// Clips oversized `--- ATTACHMENTS ---` payloads (`> 2,000` chars) once a user turn ages
+/// outside the 4-turn freshness window, closing any truncated code fence cleanly.
+fn clip_stale_attachments_in_place(text: &mut String) {
+    if text.ends_with(ATTACHMENT_CLIP_SUFFIX) {
+        return;
+    }
+    let Some(att_idx) = text.find(super::ATTACHMENTS_CONTEXT_MARKER) else {
+        return;
+    };
+    let att_slice = &text[att_idx..];
+    if att_slice.len() <= TRANSCRIPT_CLIP_CHARS {
+        return;
+    }
+    let cut = att_idx + att_slice.floor_char_boundary(TRANSCRIPT_CLIP_CHARS);
+    text.truncate(cut);
+    if let Some(ticks) = unclosed_fence_ticks(&text[att_idx..]) {
+        text.push('\n');
+        for _ in 0..ticks {
+            text.push('`');
+        }
+    }
+    text.push_str(ATTACHMENT_CLIP_SUFFIX);
+}
+
 /// Prepares the history for a new chat completion using default (single-speaker) perspective.
 #[must_use]
 pub fn prepare_query_history(history: Vec<Message>, history_len: usize) -> Vec<Message> {
@@ -472,6 +574,7 @@ pub fn prepare_settled_history_for_speaker(
                 !trimmed.starts_with(SESSION_CHECKPOINT_PREFIX)
                     && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
                     && !trimmed.starts_with(UNDO_HISTORY_PREFIX)
+                    && !trimmed.starts_with(ROUNDTABLE_HANDOFF_BRIDGE)
             })
     };
 
@@ -491,14 +594,7 @@ pub fn prepare_settled_history_for_speaker(
             for item in content.iter_mut() {
                 match item {
                     rig::message::UserContent::Text(text) => {
-                        let dyn_start = text
-                            .text
-                            .find("\n\n--- UPDATE CHANGELOG CONTEXT ---")
-                            .or_else(|| text.text.find("\n\n## YOUR IDENTITY"))
-                            .or_else(|| text.text.find("\n\n## CURRENT TURN CONTEXT"))
-                            .or_else(|| text.text.find("\n\n--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---"))
-                            .or_else(|| text.text.find("\n\n--- GLOBAL RADAR"))
-                            .or_else(|| text.text.find("\n\nTerminal Snapshot:\n```"));
+                        let dyn_start = find_dynamic_tail_outside_fences(&text.text);
 
                         if let Some(idx) = dyn_start {
                             if is_old {
@@ -533,6 +629,10 @@ pub fn prepare_settled_history_for_speaker(
                                     text.text.push_str(&snap_block);
                                 }
                             }
+                        }
+
+                        if is_old {
+                            clip_stale_attachments_in_place(&mut text.text);
                         }
                     }
                     rig::message::UserContent::ToolResult(tool_res) if is_old => {
@@ -608,42 +708,53 @@ pub fn prepare_settled_history_for_speaker(
         }
     }
 
-    // If previous turns were interrupted or perspective-flipped, history may contain consecutive
-    // User messages. If the second User message is a `[Character ... said]:` block and the first
-    // is a pure text User block, merge them cleanly; otherwise inject a synthetic acknowledgment
-    // to maintain strict user/assistant alternation.
-    let mut repaired_history: Vec<Message> = Vec::with_capacity(perspective_history.len() + 1);
+    // Enforce strict bidirectional `User` / `Assistant` alternation across interrupted turns,
+    // perspective-flipped peer speeches, and guest tool-call handoffs.
+    let mut repaired_history: Vec<Message> = Vec::with_capacity(perspective_history.len() + 2);
     for msg in perspective_history {
-        if let Message::User { ref content } = msg
-            && let Some(Message::User {
-                content: prev_content,
-            }) = repaired_history.last_mut()
-        {
-            let curr_peer_text = if content.len() == 1 {
-                content
-                    .first()
-                    .and_then(rig::message::UserContent::as_text)
-                    .filter(|t| t.starts_with("[Character ") || t.starts_with("[ROUNDTABLE TURN"))
-                    .map(str::to_string)
-            } else {
-                None
-            };
+        match (&msg, repaired_history.last_mut()) {
+            (
+                Message::User { content },
+                Some(Message::User {
+                    content: prev_content,
+                }),
+            ) => {
+                let curr_peer_text = if content.len() == 1 {
+                    content
+                        .first()
+                        .and_then(rig::message::UserContent::as_text)
+                        .filter(|t| {
+                            t.starts_with("[Character ") || t.starts_with("[ROUNDTABLE TURN")
+                        })
+                        .map(str::to_string)
+                } else {
+                    None
+                };
 
-            let prev_is_text_only = prev_content
-                .iter()
-                .all(|c| matches!(c, rig::message::UserContent::Text(_)));
+                let prev_is_text_only = prev_content
+                    .iter()
+                    .all(|c| matches!(c, rig::message::UserContent::Text(_)));
 
-            if let Some(peer_text) = curr_peer_text
-                && prev_is_text_only
-                && let Some(rig::message::UserContent::Text(prev_t)) = prev_content.iter_mut().next()
-            {
-                prev_t.text = format!("{}\n\n{}", prev_t.text, peer_text);
-                continue;
+                if let Some(ref peer_text) = curr_peer_text
+                    && prev_is_text_only
+                    && let Some(rig::message::UserContent::Text(prev_t)) =
+                        prev_content.iter_mut().next()
+                {
+                    prev_t.text = format!("{}\n\n{}", prev_t.text, peer_text);
+                    continue;
+                }
+
+                let bridge = if curr_peer_text.is_some() {
+                    COMPLETED_TOOL_STEP_BRIDGE
+                } else {
+                    "[Previous task was interrupted by the user]"
+                };
+                repaired_history.push(Message::assistant(bridge));
             }
-
-            repaired_history.push(Message::assistant(
-                "[Previous task was interrupted by the user]",
-            ));
+            (Message::Assistant(_), Some(Message::Assistant(_))) => {
+                repaired_history.push(Message::user(ROUNDTABLE_HANDOFF_BRIDGE));
+            }
+            _ => {}
         }
         repaired_history.push(msg);
     }
@@ -1227,5 +1338,98 @@ mod tests {
         } else {
             panic!("Expected recent What's New turn to retain changelog");
         }
+    }
+
+    #[test]
+    fn attachments_preserve_fenced_debug_markers_inside_window_and_clip_outside_window() {
+        let huge_paste = "line_payload_data = 1;\n".repeat(160);
+        assert!(huge_paste.len() > 3_200);
+        let old_attachment = format!(
+            "Inspect [Pasted ~160 lines]\n\n--- ATTACHMENTS ---\n\n**[Pasted ~160 lines]**\n```toml\n{huge_paste}```\n\nTerminal Snapshot:\n```\n[TERMINAL_SNAPSHOT: EMPTY]\n```"
+        );
+        let recent_fenced_debug = "Explain [Pasted ~6 lines]\n\n--- ATTACHMENTS ---\n\n**[Pasted ~6 lines]**\n```text\nsample log\n\n## YOUR IDENTITY\nAgent Name: **Sample**\n```\n\nTerminal Snapshot:\n```\n$ cargo test\nok\n```";
+
+        let history = vec![
+            user(&old_attachment),
+            asst("Reviewed old paste."),
+            user("Turn 2"),
+            asst("Reply 2"),
+            user("Turn 3"),
+            asst("Reply 3"),
+            user("Turn 4"),
+            asst("Reply 4"),
+            user(recent_fenced_debug),
+            asst("Reviewed recent paste."),
+            user("Turn 6 current"),
+        ];
+
+        let prepared = prepare_query_history(history, 0);
+
+        // 1. Old attachment outside the 4-turn window is clipped at ~2,000 chars and closes its code fence!
+        if let Message::User { content } = &prepared[0]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert!(t.text.len() < 2_200);
+            assert!(t.text.ends_with(ATTACHMENT_CLIP_SUFFIX));
+            assert!(
+                unclosed_fence_ticks(&t.text).is_none(),
+                "clipped attachment must close any open markdown code fence:\n{}",
+                t.text
+            );
+        } else {
+            panic!("Expected clipped old attachment user turn");
+        }
+
+        // 2. Recent attachment with literal `\n\n## YOUR IDENTITY` inside its ```text fence
+        //    is preserved verbatim without premature truncation!
+        if let Message::User { content } = &prepared[8]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert!(t.text.contains("Agent Name: **Sample**"));
+            assert!(t.text.contains("Terminal Snapshot:\n```\n$ cargo test\nok\n```"));
+        } else {
+            panic!("Expected intact recent fenced attachment");
+        }
+    }
+
+    #[test]
+    fn collaborative_handoff_with_guest_tool_call_maintains_strict_bidirectional_alternation() {
+        let niko_opening = tag_assistant_text("id-niko", "Niko Una", "Stepping aside for @levi-kujo!");
+        let levi_reply = tag_assistant_text("id-levi", "Levi Kujo", "Generated the asset cleanly.");
+
+        // Host Niko calls `invite_character` -> Guest Levi runs `[COLLABORATIVE HANDOFF]` and calls `generate_image` -> User sends Turn 2 to Niko!
+        let history = vec![
+            user("Create an icon"),
+            tool_call_msg("call_inv_1", "invite_character", "levi-kujo"),
+            tool_result_msg("call_inv_1", "invite_character", "{\"success\":true}"),
+            asst(&niko_opening),
+            user("[COLLABORATIVE HANDOFF — 1 Turn]\nComplete the requested task."),
+            tool_call_msg("call_img_1", "generate_image", "assets/icon.png"),
+            tool_result_msg("call_img_1", "generate_image", "{\"success\":true}"),
+            asst(&levi_reply),
+            user("Now add that icon to README.md"),
+        ];
+
+        let niko_view =
+            prepare_query_history_for_speaker(history.clone(), history.len(), "id-niko", "Niko Una");
+
+        // Verify strict User/Assistant alternation with zero consecutive Assistant or consecutive User messages!
+        for pair in niko_view.windows(2) {
+            let is_u0 = matches!(pair[0], Message::User { .. });
+            let is_u1 = matches!(pair[1], Message::User { .. });
+            assert_ne!(
+                is_u0, is_u1,
+                "Expected strict User/Assistant alternation across guest tool handoff, got adjacent messages:\n{pair:#?}"
+            );
+        }
+        assert!(
+            matches!(niko_view.last(), Some(Message::Assistant(_))),
+            "Prepared history must end on Assistant before outgoing User prompt"
+        );
+        let serialized = format!("{niko_view:#?}");
+        assert!(
+            !serialized.contains("[Previous task was interrupted by the user]"),
+            "Completed peer tool calls must never emit false user-interruption markers:\n{serialized}"
+        );
     }
 }

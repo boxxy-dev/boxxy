@@ -150,7 +150,7 @@ pub fn spawn_turn(
     let session_ctx_clone = _session_ctx.to_string();
 
     tokio::spawn(async move {
-        let (speaker, host_agent_name, _host_character_id, is_incognito) = {
+        let (speaker, host_agent_name, _host_character_id, is_incognito, is_headless) = {
             let mut state_lock = state.lock().await;
             state_lock.last_turn_paused_queue = false;
             let raw_host_name = if state_lock.agent_name.is_empty() {
@@ -159,15 +159,26 @@ pub fn spawn_turn(
                 state_lock.agent_name.clone()
             };
             let host_cid = state_lock.character_id.clone();
-            let cached_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
-            let host_speaker = crate::engine::session::roundtable::resolve_host_speaker(
-                &host_cid,
-                &raw_host_name,
-                &cached_catalog,
-            );
+            let is_headless = state_lock.is_headless;
+            let host_speaker = if is_headless {
+                crate::engine::session::roundtable::SpeakerIdentity {
+                    character_id: host_cid.clone(),
+                    display_name: raw_host_name,
+                    slug: "headless-worker".to_string(),
+                    is_guest: false,
+                    home_pane_id: None,
+                }
+            } else {
+                let cached_catalog = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+                crate::engine::session::roundtable::resolve_host_speaker(
+                    &host_cid,
+                    &raw_host_name,
+                    &cached_catalog,
+                )
+            };
             let host_name = host_speaker.display_name.clone();
             let spk = state_lock.active_speaker.clone().unwrap_or(host_speaker);
-            (spk, host_name, host_cid, state_lock.incognito)
+            (spk, host_name, host_cid, state_lock.incognito, is_headless)
         };
         let agent_name = speaker.display_name.clone();
         let character_id = speaker.character_id.clone();
@@ -623,12 +634,14 @@ pub fn spawn_turn(
                         usage: None,
                         typewriter: false,
                     };
-                    persist_visual_event(
-                        db.clone(),
-                        session_id_clone.clone(),
-                        pane_id.clone(),
-                        &err_card,
-                    );
+                    if !is_headless {
+                        persist_visual_event(
+                            db.clone(),
+                            session_id_clone.clone(),
+                            pane_id.clone(),
+                            &err_card,
+                        );
+                    }
                     let _ = tx_ui.send(err_card).await;
                     if let Some(request_id) = delegate_reply_id {
                         let err_str = format!("Error: {err}");
@@ -739,12 +752,14 @@ pub fn spawn_turn(
                         result: search_summary,
                         usage: None,
                     };
-                    persist_visual_event(
-                        db.clone(),
-                        session_id_clone.clone(),
-                        pane_id.clone(),
-                        &tool_event,
-                    );
+                    if !is_headless {
+                        persist_visual_event(
+                            db.clone(),
+                            session_id_clone.clone(),
+                            pane_id.clone(),
+                            &tool_event,
+                        );
+                    }
                     let _ = tx_ui.send(tool_event).await;
                 }
 
@@ -836,16 +851,18 @@ pub fn spawn_turn(
                     }
                 }
 
-                let p_ctx = persistence::PersistenceContext {
-                    session_id: session_id_clone.clone(),
-                    agent_name: host_agent_name.clone(),
-                    user_query: prompt_clone.clone(),
-                    cwd: cwd_clone.clone(),
-                    settings: (*settings).clone(),
-                    db: db.clone(),
-                    tx_self: tx_self.clone(),
-                };
-                persistence::perform_persistence(p_ctx, state.clone()).await;
+                if !is_headless {
+                    let p_ctx = persistence::PersistenceContext {
+                        session_id: session_id_clone.clone(),
+                        agent_name: host_agent_name.clone(),
+                        user_query: prompt_clone.clone(),
+                        cwd: cwd_clone.clone(),
+                        settings: (*settings).clone(),
+                        db: db.clone(),
+                        tx_self: tx_self.clone(),
+                    };
+                    persistence::perform_persistence(p_ctx, state.clone()).await;
+                }
 
                 let mut command_opt = None;
                 let mut clean_diagnosis = display_response.clone();
@@ -903,12 +920,14 @@ pub fn spawn_turn(
                         usage,
                     };
                     state.lock().await.pending_inject_command = true;
-                    persist_visual_event(
-                        db.clone(),
-                        session_id_clone.clone(),
-                        pane_id.clone(),
-                        &event,
-                    );
+                    if !is_headless {
+                        persist_visual_event(
+                            db.clone(),
+                            session_id_clone.clone(),
+                            pane_id.clone(),
+                            &event,
+                        );
+                    }
                     let _ = tx_ui.send(event).await;
                 } else {
                     let event = ClawEngineEvent::DiagnosisComplete {
@@ -919,12 +938,14 @@ pub fn spawn_turn(
                         usage,
                         typewriter: drama_mode,
                     };
-                    persist_visual_event(
-                        db.clone(),
-                        session_id_clone.clone(),
-                        pane_id.clone(),
-                        &event,
-                    );
+                    if !is_headless {
+                        persist_visual_event(
+                            db.clone(),
+                            session_id_clone.clone(),
+                            pane_id.clone(),
+                            &event,
+                        );
+                    }
                     let _ = tx_ui.send(event).await;
                 }
 
@@ -1034,12 +1055,14 @@ pub fn spawn_turn(
                     usage: None,
                     typewriter: false,
                 };
-                persist_visual_event(
-                    db.clone(),
-                    session_id_clone.clone(),
-                    pane_id.clone(),
-                    &event,
-                );
+                if !is_headless {
+                    persist_visual_event(
+                        db.clone(),
+                        session_id_clone.clone(),
+                        pane_id.clone(),
+                        &event,
+                    );
+                }
                 let _ = tx_ui.send(event).await;
 
                 if let Some(request_id) = delegate_reply_id {
