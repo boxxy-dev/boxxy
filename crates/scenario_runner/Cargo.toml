@@ -3,27 +3,35 @@ name = "scenario-runner"
 version.workspace = true
 edition.workspace = true
 authors.workspace = true
+description = "Deterministic headless E2E workflow test harness for Boxxy Claw, PTY persistence, and CLI diagnostics."
 license.workspace = true
+
+[lints]
+workspace = true
 
 [dependencies]
 anyhow.workspace = true
 async-channel.workspace = true
+boxxy-agent = { path = "../boxxy_agent" }
+boxxy-ai-core = { path = "../ai_core" }
 boxxy-claw = { path = "../boxxy_claw" }
 boxxy-claw-protocol = { path = "../boxxy_claw_protocol" }
-boxxy-terminal = { path = "../terminal" }
-boxxy-ai-core = { path = "../ai_core" }
 boxxy-core-toolbox = { path = "../core_toolbox" }
-boxxy-agent = { path = "../boxxy_agent" }
+boxxy-db = { path = "../db" }
+boxxy-model-selection.workspace = true
 boxxy-preferences = { path = "../preferences" }
-serde = { workspace = true }
-serde_json = { workspace = true }
-serde_yml = { workspace = true }
-tokio = { workspace = true }
-zbus = { workspace = true }
-uuid = { workspace = true }
-futures-util = { workspace = true }
-
-log.workspace = true
+boxxy-sys-utils.workspace = true
 env_logger.workspace = true
-chrono.workspace = true
-tempfile = "3.27.0"
+libc.workspace = true
+log.workspace = true
+nix.workspace = true
+parking_lot.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+boxxy-cli.workspace = true
+serial_test.workspace = true

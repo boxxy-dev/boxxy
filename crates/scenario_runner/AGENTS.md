@@ -1,58 +1,39 @@
-# Scenario Runner — Headless E2E Agent Testing
+# Scenario Runner (`scenario-runner`) — Deterministic Headless E2E Harness
 
 ## Overview
 
-The `scenario-runner` crate provides an automated End-to-End (E2E) testing framework for Boxxy-Claw. It allows developers to define complex multi-agent "scenarios" in YAML and execute them headlessly (without GTK) to verify agent behavior, tool usage, and swarm orchestration.
+`scenario-runner` is Boxxy's GTK-free, deterministic End-to-End (E2E) workflow test harness (`crates/scenario_runner`). Instead of relying on live external LLM API keys or untyped YAML fixtures, it drives the **real** headless Boxxy stack in standard `cargo test` runs:
+- Real `ClawSession` actors (`boxxy-claw`), `rig 0.47` streaming + tool concurrency, and `WorkspaceRegistry`
+- Real `ClawSubsystem` (`boxxy-agent`) sharing a single `AgentState` with `PtyRegistry`
+- Real `boxxy-db` SQLite WAL + FTS5 persistence inside a process-isolated `TempDir` config root
+- Real Linux POSIX PTYs (`/bin/bash` + `OSC 7` / `OSC 133` shell integration + 4 MB detached `RingBuffer`)
+- Headless `boxxy-cli` `+doctor` and `+env` verification
 
-## Responsibilities
+## Architecture & Modules
 
-- **Headless Runtime:** Simulates the Boxxy environment by spawning `WorkspaceRegistry` and `ClawSession` actors directly.
-- **Terminal Mocking:** Maintains in-memory string buffers for each pane, allowing agents to use `read_pane_buffer` and receive simulated output.
-- **P2P Host Bridge:** Establishes a private zbus P2P connection to an internal `BoxxyAgent`. This allows agents to execute real shell commands and file operations in a safe, isolated `/tmp` directory.
-- **Event Interception:** Listens to the `tx_ui` channel to verify that agents reach specific states (e.g., `Suspended`, `Thinking`) or call specific tools.
+- **`src/config_env.rs`**: Bootstraps a process-scoped temporary config root via `boxxy_sys_utils::configure_dev_options(CliDevOverrides { dev: true, ephemeral: true, config_dir: Some(...), .. })`, disabling telemetry, self-updates, and ambient network fetches (`enable_os_context = false`), seeding bundled Characters v2 packages (`load_characters`), and wiring `Settings` to local `OpenAiCompatible` endpoints (`mock-claw-model` + `mock-memory-model`). Never touches `~/.config/boxxy-terminal/`.
+- **`src/mock_llm.rs` (`MockLlmServer`, `MockStep`, `MockToolCall`, `TurnGate`, `RecordedChatRequest`)**: In-process `tokio::net::TcpListener` (`127.0.0.1:0`) OpenAI `/v1/chat/completions` HTTP/SSE server. Parses multi-kilobyte request bodies (`Content-Length` up to 4 MiB), isolates background `mock-memory-model` calls (Turn-1 session title generator, `flush_history`) and `/btw` side-channel calls (`tool_choice == "none"`) from main conversation turns, streams spec-compliant SSE `reasoning_content`, `tool_calls`, `content`, and `usage` chunks, and provides zero-sleep `TurnGate` barriers for deterministic mid-turn concurrency tests.
+- **`src/pane_driver.rs` (`PaneDriver`, `CompanionPane`, `CompanionTable`)**: Non-dropping event collector (`Arc<Mutex<Vec<ClawEngineEvent>>>` + `tokio::sync::Notify`) with a monotonic read cursor so sequential `wait_for_next` assertions never drop interleaved events or re-match stale turns. Handles correlation-ID side effects (`RequestSpawnAgent`, `RequestScrollback`, `InjectKeystrokes`, `RequestCloseAgent`, and companion-pane `ProposeTerminalCommand`).
+- **`src/pty_driver.rs` (`PtyShellSession`)**: Real POSIX pseudoterminal (`posix_openpt` / `grantpt` / `unlockpt`) + `/bin/bash` child running with a synthetic `HOME` (never sourcing host `~/.bashrc`) and Boxxy's `apply_shell_integration` scripts. Exercises `PtyRegistry::release_owner`, detached `RingBuffer` capture, `reattach`, and process-group `SIGKILL` cleanup on `Drop`.
+- **`src/harness.rs` (`TestWorkspace`)**: High-level test fixture combining `MockLlmServer`, shared `AgentState` (`ClawSubsystem` + `PtyRegistry`), `Db`, temporary workspace files, Vibe Mode directory trust, and `BLACKLIST.md` configuration.
+- **`src/main.rs`**: Standalone CLI smoke check (`cargo run -p scenario-runner`) verifying edit proposal, approval, `/undo`, and real PTY `OSC 133` round-trip in `< 200ms`.
 
-## How to Create a Scenario
+## Automated Real User Workflow Suites (`tests/workflows.rs` & `tests/workflows/`)
 
-Scenarios are defined in `crates/scenario_runner/scenarios/*.yml`. 
+Organized as modular submodules inside a single integration test binary (`tests/workflows.rs`) so Cargo links once while executing every workflow under `cargo test -p scenario-runner`:
+1. **`tests/workflows/edit_and_undo.rs`**: `@file` Turn-1 hash pre-loading, `replace_in_file` diff proposals, zero-token user rejection (`ProposalResolved { approved: false }`), mid-proposal user steering, approval `TurnTraceItem::Edit`, and `/undo` byte-exact file restoration.
+2. **`tests/workflows/error_diagnosis.rs`**: Origin-aware terminal error diagnosis — ignores benign exit codes (`grep` 1, `SIGINT` 130), emits `LazyErrorIndicator` at **0 LLM tokens** on user-typed errors until `RequestLazyDiagnosis`, and auto-diagnoses agent-originated command failures.
+3. **`tests/workflows/queue_btw_and_abort.rs`**: In-flight `TurnGate` synchronization, FIFO follow-up prompt queueing (`QueueUpdated`), draft recall (`QueuedPromptRecalled`), concurrent `/btw` side-channel (`ForbidToolsHook` blocking rogue tool calls, warm `in_flight_snapshot` reuse, zero `claw_events` mutation), and `Abort` (`Esc Esc`) queue parking + `[Previous task was interrupted by the user]` alternation bridging.
+4. **`tests/workflows/persistence_and_resume.rs`**: Multi-tool turn trace & catalog-priced token persistence in `boxxy-db`, Turn-1 background session title generation, visual-only `/clear` (`SoftClearHistory`), and cross-pane `/resume` with `Evicted` + coalesced `RestoreHistory`.
+5. **`tests/workflows/companion_panes_and_vibe.rs`**: `1 Home Pane + Companion Terminal` (`spawn_agent` -> `pane-2` -> `terminal_exec` -> `read_pane_buffer` -> `send_keystrokes_to_pane` -> `close_agent`) and Vibe Mode ("Scoped YOLO") guardrails (trusted workspace auto-approve vs out-of-workspace manual approval fallback vs `BLACKLIST.md` hard block).
+6. **`tests/workflows/pty_and_cli.rs`**: Real PTY + `/bin/bash` `OSC 7` / `OSC 133` markers, `PtyRegistry` detach + 4 MB `RingBuffer` replay + `reattach`, and headless `boxxy-cli` `+doctor --json` & `+env` execution.
 
-### YAML Schema
-
-```yaml
-name: "My Scenario Name"
-timeout_sec: 60      # Global timeout
-panes:
-  - id: "server"     # Unique ID for the test
-    name: "Server"   # Mnemonic name used by agents
-steps:
-  - action: "prompt"
-    pane: "server"
-    prompt: "Monitor logs for error..."
-  - action: "inject_terminal_output"
-    pane: "server"
-    output: "ERROR: DB Down\n"
-  - action: "wait_for_status"
-    pane: "server"
-    status: "Suspended"
-assertions:
-  - type: "file_contains"
-    path: "result.txt"
-    content: "Success"
-```
-
-## How to Run Scenarios
-
-You can run a specific scenario using the `scenario-runner` binary:
+## Running Tests
 
 ```bash
-# Run a specific scenario
-cargo run -p scenario-runner -- crates/scenario_runner/scenarios/01_pubsub_watchdog.yml
+# Run all deterministic E2E workflow suites
+cargo test -p scenario-runner
 
-# Run with full logging
-RUST_LOG=info cargo run -p scenario-runner -- crates/scenario_runner/scenarios/01_pubsub_watchdog.yml
+# Run the standalone smoke check binary
+cargo run -p scenario-runner
 ```
-
-## Safety Constraints
-
-1. **Isolation:** The runner automatically creates a temporary directory (e.g., `/tmp/boxxy_test_...`) and sets it as the `CWD` for all agents. 
-2. **Real Execution:** Shell commands run via `sys_shell_exec` are **real**. Do not include destructive commands (like `rm -rf /`) in your YAML files.
-3. **Mocking:** Terminal output is mocked. Use `inject_terminal_output` in your YAML to simulate what an agent "sees" in the terminal.
