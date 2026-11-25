@@ -124,14 +124,53 @@ pub struct SessionState {
 
 impl SessionState {
     /// Returns `(agent_name, character_id)` of the character currently speaking in this turn
-    /// (falling back to the pane's Host character).
+    /// (falling back to the pane's canonical Host character display name).
     #[must_use]
     pub fn effective_speaker(&self) -> (String, String) {
-        if let Some(ref spk) = self.active_speaker {
-            (spk.display_name.clone(), spk.character_id.clone())
-        } else {
-            (self.agent_name.clone(), self.character_id.clone())
-        }
+        self.active_speaker.as_ref().map_or_else(
+            || {
+                if !self.character_id.is_empty() && !self.incognito {
+                    let cached = boxxy_claw_protocol::characters::CHARACTER_CACHE.load();
+                    let host = roundtable::resolve_host_speaker(
+                        &self.character_id,
+                        &self.agent_name,
+                        &cached,
+                    );
+                    (host.display_name, self.character_id.clone())
+                } else {
+                    (self.agent_name.clone(), self.character_id.clone())
+                }
+            },
+            |spk| (spk.display_name.clone(), spk.character_id.clone()),
+        )
+    }
+
+    /// Resets transient per-session context, snapshot/file hashes, `/undo` buffers,
+    /// lazy-error stashes, and roundtable state across session boundaries (`Initialize`,
+    /// `ResumeSession`, `Deactivate`, `Evict`).
+    pub fn reset_ephemeral_session_context(&mut self) {
+        self.last_snapshot_hash = None;
+        self.read_file_hashes.clear();
+        self.current_turn_snapshots.clear();
+        self.last_turn_snapshots.clear();
+        self.current_turn_trace.clear();
+        self.generated_images_this_turn.clear();
+        self.current_turn_user_images.clear();
+        self.pending_lazy_diagnosis = None;
+        self.pending_proposal_summary = None;
+        self.pending_inject_command = false;
+        self.active_speaker = None;
+        self.next_roundtable_turn = None;
+        self.roundtable.clear();
+        self.roundtable.drama_mode = false;
+        self.sleep_timestamp = None;
+        self.sleep_commands.clear();
+        self.awaiting_tasks.clear();
+        self.last_turn_paused_queue = false;
+        self.in_flight_snapshot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clear();
     }
 
     /// Returns true if an in-turn oneshot approval channel is actively blocking the current turn.

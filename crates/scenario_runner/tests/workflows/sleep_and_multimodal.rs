@@ -297,6 +297,54 @@ async fn interleaved_multimodal_attachments_and_whats_new_zero_tool_workflow() {
         "Read What's New turn must skip @file preloading and skill injection on changelog text"
     );
 
+    // Wait for `whats_new_pane` SQLite persistence and verify `sessions.history_json`
+    // stores the clean changelog without transient `## YOUR IDENTITY` bloat!
+    let store = Store::new(ws.db.pool());
+    let wn_deadline = tokio::time::Instant::now() + TIMEOUT;
+    loop {
+        if let Ok(Some(wn_sess)) = store.get_session(whats_new_pane.session_id()).await
+            && wn_sess.title.as_deref() == Some("Boxxy Nightly Update Summary")
+        {
+            let hist_json = wn_sess.history_json.unwrap_or_default();
+            assert!(
+                !hist_json.contains("## YOUR IDENTITY"),
+                "Read What's New sessions.history_json must not store transient ## YOUR IDENTITY bloat"
+            );
+            break;
+        }
+        assert!(
+            tokio::time::Instant::now() < wn_deadline,
+            "timed out waiting for Read What's New session persistence"
+        );
+        tokio::time::sleep(Duration::from_millis(20)).await;
+    }
+
+    // Follow-up Turn 2 on `whats_new_pane`: verify `--- UPDATE CHANGELOG CONTEXT ---` stays
+    // visible inside the 4-turn freshness window so follow-up questions about commits work!
+    ws.llm.push_step(MockStep::text(
+        "That commit (`refactor(vte)`) optimized the VTE parser state machine.",
+    ));
+    whats_new_pane
+        .send_query("Tell me more about the VTE commit in that update.")
+        .await
+        .expect("send whats_new follow-up");
+    whats_new_pane
+        .wait_for_diagnosis(TIMEOUT)
+        .await
+        .expect("whats_new follow-up done");
+
+    let wn_followup_conv = ws
+        .llm
+        .main_requests()
+        .last()
+        .expect("whats_new follow-up req")
+        .conversation_text();
+    assert!(
+        wn_followup_conv.contains("--- UPDATE CHANGELOG CONTEXT ---")
+            && wn_followup_conv.contains("refactor(vte): optimize @src/module.rs parser"),
+        "Turn 2 follow-up after Read What's New must retain changelog inside 4-turn freshness window:\n{wn_followup_conv}"
+    );
+
     pane.shutdown().await;
     whats_new_pane.shutdown().await;
     ws.teardown().await;

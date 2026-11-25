@@ -499,12 +499,20 @@ impl ClawSession {
                 .await;
 
             if character_id_switched && had_messages {
+                let old_pretty = crate::engine::session::roundtable::resolve_host_speaker(
+                    &old_char_id,
+                    &old_char_name,
+                    &catalog,
+                )
+                .display_name;
+                let new_pretty = crate::engine::session::roundtable::resolve_host_speaker(
+                    &self.character_id,
+                    &self.name,
+                    &catalog,
+                )
+                .display_name;
                 let switch_event = ClawEngineEvent::SystemMessage {
-                    text: format!(
-                        "Character Switch: {} → {}",
-                        crate::engine::session::roundtable::format_character_title(&old_char_name),
-                        crate::engine::session::roundtable::format_character_title(&self.name),
-                    ),
+                    text: format!("Character Switch: {old_pretty} → {new_pretty}"),
                 };
                 crate::engine::persist_visual_event(
                     self.db.clone(),
@@ -570,6 +578,7 @@ impl ClawSession {
         self.total_cost_usd = 0.0;
 
         let mut state_lock = self.state.lock().await;
+        state_lock.reset_ephemeral_session_context();
         state_lock.agent_name = name.clone();
         state_lock.history.clear();
         state_lock.flushed_watermark = 0;
@@ -639,6 +648,9 @@ impl ClawSession {
         self.clear_ui_history().await;
 
         let workspace = crate::registry::workspace::global_workspace().await;
+        workspace
+            .update_pane_skills(self.pane_id.clone(), Vec::new())
+            .await;
         workspace
             .update_pane_state(
                 self.pane_id.clone(),

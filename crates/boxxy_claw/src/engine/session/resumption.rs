@@ -122,6 +122,8 @@ impl ClawSession {
 
                 let (agent_name_clone, tasks_clone, web_search_enabled, vibe_enabled) = {
                     let mut state_lock = self.state.lock().await;
+                    state_lock.reset_ephemeral_session_context();
+                    state_lock.status = crate::engine::AgentStatus::Waiting;
                     state_lock.session_id.clone_from(&session_id);
                     state_lock.agent_name.clone_from(&self.name);
                     state_lock.character_id.clone_from(&self.character_id);
@@ -131,11 +133,21 @@ impl ClawSession {
                     state_lock.total_tokens = self.total_tokens;
                     state_lock.context_tokens = self.context_tokens;
                     state_lock.total_cost_usd = self.total_cost_usd;
+                    state_lock.history.clear();
+                    state_lock.flushed_watermark = 0;
+                    state_lock.pending_tasks.clear();
 
                     if let Some(history_json) = session.history_json {
                         match serde_json::from_str::<Vec<Message>>(&history_json) {
                             Ok(mut history) => {
                                 if !prev_char_id.is_empty() || !prev_name.is_empty() {
+                                    let prev_canonical =
+                                        crate::engine::session::roundtable::resolve_host_speaker(
+                                            &prev_char_id,
+                                            &prev_name,
+                                            &registry,
+                                        )
+                                        .display_name;
                                     for msg in &mut history {
                                         if let Message::Assistant(turn) = msg {
                                             for item in &mut turn.content {
@@ -146,7 +158,7 @@ impl ClawSession {
                                                 {
                                                     t.text = crate::engine::turn::history::tag_assistant_text(
                                                         &prev_char_id,
-                                                        &prev_name,
+                                                        &prev_canonical,
                                                         &t.text,
                                                     );
                                                 }
@@ -175,11 +187,6 @@ impl ClawSession {
                     }
 
                     state_lock.persistent_agent = None;
-                    state_lock
-                        .in_flight_snapshot
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .clear();
                     (
                         state_lock.agent_name.clone(),
                         state_lock.pending_tasks.clone(),
@@ -240,9 +247,19 @@ impl ClawSession {
 
                     if switched_character && !rows.is_empty() {
                         let old_pretty =
-                            crate::engine::session::roundtable::format_character_title(&prev_name);
+                            crate::engine::session::roundtable::resolve_host_speaker(
+                                &prev_char_id,
+                                &prev_name,
+                                &registry,
+                            )
+                            .display_name;
                         let new_pretty =
-                            crate::engine::session::roundtable::format_character_title(&self.name);
+                            crate::engine::session::roundtable::resolve_host_speaker(
+                                &self.character_id,
+                                &self.name,
+                                &registry,
+                            )
+                            .display_name;
                         let switch_text = format!("Character Switch: {old_pretty} → {new_pretty}");
                         let already_appended = matches!(
                             rows.last(),
@@ -268,6 +285,9 @@ impl ClawSession {
 
                 workspace
                     .register_pane_tx(self.pane_id.clone(), self.tx_self.clone())
+                    .await;
+                workspace
+                    .update_pane_skills(self.pane_id.clone(), Vec::new())
                     .await;
                 workspace
                     .update_pane_state(

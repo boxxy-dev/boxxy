@@ -315,6 +315,7 @@ impl ClawSession {
                 *self.db.lock().await = None;
 
                 let mut state_lock = self.state.lock().await;
+                state_lock.reset_ephemeral_session_context();
                 state_lock.history.clear();
                 state_lock.flushed_watermark = 0;
                 state_lock.pending_tasks.clear();
@@ -336,6 +337,7 @@ impl ClawSession {
                 *self.db.lock().await = None;
 
                 let mut state_lock = self.state.lock().await;
+                state_lock.reset_ephemeral_session_context();
                 state_lock.history.clear();
                 state_lock.flushed_watermark = 0;
                 state_lock.pending_tasks.clear();
@@ -433,11 +435,19 @@ impl ClawSession {
                     state_lock.web_search_enabled = enabled;
                     state_lock.persistent_agent = None;
                     let settings = boxxy_preferences::Settings::load();
+                    let resolved_claw = if self.incognito {
+                        settings.claw_model.clone()
+                    } else {
+                        settings.resolve_character_model(&self.character_id)
+                    };
                     state_lock.current_search_label =
-                        crate::engine::agent_config::resolve_active_search_label(
-                            &settings, enabled,
+                        crate::engine::agent_config::resolve_active_search_label_for_model(
+                            &settings,
+                            &resolved_claw,
+                            enabled,
                         )
                         .to_string();
+                    drop(state_lock);
                     let _ = self
                         .tx_ui
                         .send(ClawEngineEvent::WebSearchStatusChanged(enabled))

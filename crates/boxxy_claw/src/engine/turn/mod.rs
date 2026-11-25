@@ -108,6 +108,20 @@ use log::info;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
+pub(crate) fn append_preamble_section(buf: &mut String, section: &str) {
+    let trimmed = section.trim();
+    if trimmed.is_empty() {
+        return;
+    }
+    while buf.ends_with('\n') {
+        buf.pop();
+    }
+    if !buf.is_empty() {
+        buf.push_str("\n\n");
+    }
+    buf.push_str(trimmed);
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn spawn_turn(
     pane_id: String,
@@ -215,6 +229,8 @@ pub fn spawn_turn(
             state_lock.history.clear();
             state_lock.flushed_watermark = 0;
             state_lock.read_file_hashes.clear();
+            state_lock.last_snapshot_hash = None;
+            state_lock.last_turn_snapshots.clear();
         }
 
         let user_authored_prompt = extract_user_authored_prompt(&prompt_clone).to_string();

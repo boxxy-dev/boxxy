@@ -11,6 +11,8 @@ mod context_hygiene_and_compaction;
 mod edit_and_undo;
 #[path = "workflows/error_diagnosis.rs"]
 mod error_diagnosis;
+#[path = "workflows/hotswap_dreaming_and_handoff.rs"]
+mod hotswap_dreaming_and_handoff;
 #[path = "workflows/incognito_and_roundtable.rs"]
 mod incognito_and_roundtable;
 #[path = "workflows/persistence_and_resume.rs"]

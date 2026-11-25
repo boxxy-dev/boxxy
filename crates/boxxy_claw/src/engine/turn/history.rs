@@ -4,6 +4,7 @@ const SPEAKER_PREFIX: &str = "[SPEAKER_ID:";
 pub const SESSION_CHECKPOINT_PREFIX: &str = "[SESSION_CHECKPOINT]";
 pub const SESSION_CHECKPOINT_ACK: &str = "Understood. Retaining session checkpoint context.";
 pub const WHILE_YOU_SLEPT_ACK: &str = "Understood. Noted terminal activity while sleeping.";
+pub const UNDO_HISTORY_PREFIX: &str = "[System: The user ran /undo";
 
 /// Maximum characters retained per tool result in turns older than the freshness window
 /// (matches `OpenCode` V2's `TRANSCRIPT_CLIP = 2000` in `session/compaction.ts`).
@@ -47,6 +48,23 @@ pub(crate) fn extract_interruption_from_tool_result(
         }
     }
     None
+}
+
+/// Extracts a `--- UPDATE CHANGELOG CONTEXT ---` block from `section` (stripping any
+/// trailing `## YOUR IDENTITY` / `## CURRENT TURN CONTEXT` metadata) so recent follow-up
+/// turns inside the 4-turn freshness window retain post-update changelog visibility.
+#[must_use]
+fn extract_changelog_block(section: &str) -> Option<String> {
+    let marker = super::WHATS_NEW_CONTEXT_MARKER;
+    let start = section.find(marker)?;
+    let from_marker = &section[start..];
+    let end = from_marker
+        .find("\n\n## YOUR IDENTITY")
+        .or_else(|| from_marker.find("\n\n## CURRENT TURN CONTEXT"))
+        .or_else(|| from_marker.find("\n\nTerminal Snapshot:\n```"))
+        .unwrap_or(from_marker.len());
+    let trimmed = from_marker[..end].trim();
+    (!trimmed.is_empty()).then(|| format!("\n\n{trimmed}"))
 }
 
 /// Extracts a `--- REFERENCED FILES (PRE-LOADED VIA @MENTION) --- ... --- END REFERENCED FILES ---`
@@ -109,6 +127,7 @@ pub fn is_exchange_start(msg: &Message) -> bool {
             !trimmed.is_empty()
                 && !trimmed.starts_with(SESSION_CHECKPOINT_PREFIX)
                 && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
+                && !trimmed.starts_with(UNDO_HISTORY_PREFIX)
                 && !trimmed.starts_with("[ROUNDTABLE TURN")
                 && !trimmed.starts_with("[COLLABORATIVE HANDOFF")
         })
@@ -452,6 +471,7 @@ pub fn prepare_settled_history_for_speaker(
                 let trimmed = t.trim_start();
                 !trimmed.starts_with(SESSION_CHECKPOINT_PREFIX)
                     && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
+                    && !trimmed.starts_with(UNDO_HISTORY_PREFIX)
             })
     };
 
@@ -487,9 +507,10 @@ pub fn prepare_settled_history_for_speaker(
                                 text.text.truncate(idx);
                             } else {
                                 // Inside the 4-turn freshness window: strip redundant identity/memories/skills/radar
-                                // (which are freshly injected in the current USER PROMPT), while keeping any `@file`
-                                // slices pre-loaded in those recent turns and any changed non-empty Terminal Snapshot.
+                                // (which are freshly injected in the current USER PROMPT), while keeping any
+                                // post-update changelog, `@file` slices, and changed non-empty Terminal Snapshot.
                                 let tail_slice = &text.text[idx..];
+                                let kept_changelog = extract_changelog_block(tail_slice);
                                 let kept_refs = extract_referenced_files_block(tail_slice);
                                 let kept_snap = tail_slice
                                     .find("\n\nTerminal Snapshot:\n```")
@@ -502,6 +523,9 @@ pub fn prepare_settled_history_for_speaker(
                                     .map(str::to_string);
 
                                 text.text.truncate(idx);
+                                if let Some(changelog_block) = kept_changelog {
+                                    text.text.push_str(&changelog_block);
+                                }
                                 if let Some(refs_block) = kept_refs {
                                     text.text.push_str(&refs_block);
                                 }
@@ -1159,5 +1183,49 @@ mod tests {
         assert_eq!(prepared_sleep.len(), 2);
         assert!(matches!(prepared_sleep[0], Message::User { .. }));
         assert!(matches!(prepared_sleep[1], Message::Assistant(_)));
+    }
+
+    #[test]
+    fn whats_new_changelog_stays_in_4_turn_window_and_undo_does_not_evict_real_turns() {
+        let wn_old = "Summarize!\n\n--- UPDATE CHANGELOG CONTEXT ---\nCommits:\n- old commit\n\n## YOUR IDENTITY\nAgent Name: **Levi Kujo**";
+        let wn_recent = "Summarize!\n\n--- UPDATE CHANGELOG CONTEXT ---\nCommits:\n- recent vte fix\n\n## YOUR IDENTITY\nAgent Name: **Levi Kujo**";
+
+        let history = vec![
+            user(wn_old),
+            asst("Old summary."),
+            user(wn_recent),
+            asst("Recent summary."),
+            user("Follow-up 1"),
+            asst("Reply 1"),
+            user("[System: The user ran /undo to revert file changes from the last turn.]"),
+            asst("Reverted."),
+            user("Follow-up 2"),
+            asst("Reply 2"),
+            user("Follow-up 3"),
+            asst("Reply 3"),
+            user("Current prompt"),
+        ];
+
+        let prepared = prepare_query_history(history, 0);
+
+        // `wn_old` (> 4 real user turns ago) drops the heavy changelog completely
+        if let Message::User { content } = &prepared[0]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert_eq!(t.text, "Summarize!");
+        } else {
+            panic!("Expected stripped old What's New turn");
+        }
+
+        // `wn_recent` (4th real user turn back because `/undo` is not counted!) retains changelog
+        // while stripping `## YOUR IDENTITY`
+        if let Message::User { content } = &prepared[2]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert!(t.text.contains("recent vte fix"));
+            assert!(!t.text.contains("## YOUR IDENTITY"));
+        } else {
+            panic!("Expected recent What's New turn to retain changelog");
+        }
     }
 }

@@ -129,7 +129,14 @@ pub async fn flush_history(
                         && trimmed != crate::engine::turn::history::SESSION_CHECKPOINT_ACK
                         && trimmed != crate::engine::turn::history::WHILE_YOU_SLEPT_ACK
                     {
-                        let _ = writeln!(text_to_summarize, "ASSISTANT: {trimmed}");
+                        if trimmed.starts_with("↩️ **Reverted file changes") {
+                            let _ = writeln!(
+                                text_to_summarize,
+                                "ASSISTANT: [Reverted file changes from the previous turn]"
+                            );
+                        } else {
+                            let _ = writeln!(text_to_summarize, "ASSISTANT: {trimmed}");
+                        }
                     }
                 }
             }

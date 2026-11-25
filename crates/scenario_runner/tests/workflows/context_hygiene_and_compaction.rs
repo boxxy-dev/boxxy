@@ -60,8 +60,8 @@ async fn context_hygiene_snapshot_dedup_external_edits_clip_and_compaction_workf
         "expected non-empty Claw system prompt"
     );
     assert!(
-        !sys_prompt.contains("\n\n\n\n"),
-        "SYSTEM PROMPT must not contain quadruple blank lines from stripped placeholders"
+        !sys_prompt.contains("\n\n\n"),
+        "SYSTEM PROMPT must use single-blank-line separation without triple newlines:\n{sys_prompt}"
     );
     let t1_conv = reqs_t1[0].conversation_text();
     assert!(

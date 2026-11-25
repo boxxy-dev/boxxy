@@ -243,17 +243,14 @@ async fn run_btw_query(params: BtwQueryParams) {
         };
         let mut preamble = String::from(
             "You are an AI companion integrated directly into **Boxxy-Terminal**. \
-            Answer the user's `/btw` side question concisely and accurately in Markdown while staying naturally in character.\n",
+            Answer the user's `/btw` side question concisely and accurately in Markdown while staying naturally in character.",
         );
-        if !effective_preamble.trim().is_empty() {
-            preamble.push('\n');
-            preamble.push_str(&effective_preamble);
-        }
+        super::append_preamble_section(&mut preamble, &effective_preamble);
         let user_name = settings.user_profile.display_name.trim();
         if !user_name.is_empty() {
-            let _ = write!(
-                preamble,
-                "\n\n[USER INFO]\nThe user's name is: {user_name}."
+            super::append_preamble_section(
+                &mut preamble,
+                &format!("[USER INFO]\nThe user's name is: {user_name}."),
             );
         }
         if !effective_cwd.is_empty() {

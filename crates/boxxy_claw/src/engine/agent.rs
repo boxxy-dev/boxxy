@@ -949,24 +949,20 @@ pub async fn create_claw_agent(
 
     // --- Load Base Prompt ---
     let mut final_preamble =
-        load_prompt_fallback("/dev/boxxy/BoxxyTerminal/prompts/claw.md", "claw.md");
-    // {{available_skills}} is now injected per-turn in the user message; strip the placeholder
-    // along with its surrounding paragraph break so no quadruple blank line remains.
-    final_preamble = final_preamble
-        .replace("\n\n{{available_skills}}", "")
-        .replace("{{available_skills}}", "");
+        load_prompt_fallback("/dev/boxxy/BoxxyTerminal/prompts/claw.md", "claw.md")
+            .replace("\n\n{{available_skills}}", "")
+            .replace("{{available_skills}}", "");
 
-    if !config.preamble.is_empty() {
-        final_preamble.push('\n');
-        final_preamble.push_str(&config.preamble);
-    }
+    crate::engine::turn::append_preamble_section(&mut final_preamble, &config.preamble);
 
     // --- Inject User Name ---
     if let Some(user_name) = &config.user_name {
-        final_preamble.push_str("\n\n[USER INFO]\n");
-        final_preamble.push_str(&format!(
-            "The user's name is: {user_name}.\nYou should address them by this name when appropriate."
-        ));
+        crate::engine::turn::append_preamble_section(
+            &mut final_preamble,
+            &format!(
+                "[USER INFO]\nThe user's name is: {user_name}.\nYou should address them by this name when appropriate."
+            ),
+        );
     }
 
     // --- Inject Location Context (Static Across Turns for Prefix Caching) ---
@@ -976,24 +972,27 @@ pub async fn create_claw_agent(
         boxxy_sys_utils::fetch_location_context().await;
 
         if let Some(loc) = boxxy_sys_utils::get_location_context() {
-            final_preamble.push_str(&format!(
-                "\n\n[ENVIRONMENT CONTEXT]\nLocation: {}, {}\nTimezone: {}",
-                loc.city, loc.country, loc.timezone
-            ));
+            crate::engine::turn::append_preamble_section(
+                &mut final_preamble,
+                &format!(
+                    "[ENVIRONMENT CONTEXT]\nLocation: {}, {}\nTimezone: {}",
+                    loc.city, loc.country, loc.timezone
+                ),
+            );
         }
     } else {
         let policy = load_prompt_fallback(
             "/dev/boxxy/BoxxyTerminal/prompts/privacy_policy.md",
             "privacy_policy.md",
         );
-        final_preamble.push_str("\n\n");
-        final_preamble.push_str(&policy);
+        crate::engine::turn::append_preamble_section(&mut final_preamble, &policy);
     }
 
     if !provider.supports_image_generation() {
         if config.image_capable_peers.is_empty() {
-            final_preamble.push_str(
-                "\n\n[IMAGE GENERATION AVAILABILITY]\n\
+            crate::engine::turn::append_preamble_section(
+                &mut final_preamble,
+                "[IMAGE GENERATION AVAILABILITY]\n\
                 Neither your current model nor any other character in the catalog is currently assigned an image-capable provider. \
                 If the user asks to generate, draw, or edit an image, clearly explain that they can assign any character to Gemini, OpenAI, xAI, MiniMax, or OpenRouter in **Models Selection -> Character Overrides**, and do NOT substitute unsolicited ASCII art or SVG/script workarounds unless the user specifically asked for SVG or code.",
             );
@@ -1003,12 +1002,15 @@ pub async fn create_claw_agent(
                 .iter()
                 .map(|(name, slug, prov)| format!("{name} (`@{slug}`, {prov})"))
                 .collect();
-            final_preamble.push_str(&format!(
-                "\n\n[IMAGE GENERATION AVAILABILITY]\n\
-                Your current model cannot generate images directly, but these characters have image generation enabled: {}. \
-                When the user asks to generate, draw, or edit an image, call `invite_character(character=\"...\", topic=\"...\", debate=false)` with a rich visual prompt in `topic` so they can step into the overlay for 1 turn and generate it.",
-                peers.join(", ")
-            ));
+            crate::engine::turn::append_preamble_section(
+                &mut final_preamble,
+                &format!(
+                    "[IMAGE GENERATION AVAILABILITY]\n\
+                    Your current model cannot generate images directly, but these characters have image generation enabled: {}. \
+                    When the user asks to generate, draw, or edit an image, call `invite_character(character=\"...\", topic=\"...\", debate=false)` with a rich visual prompt in `topic` so they can step into the overlay for 1 turn and generate it.",
+                    peers.join(", ")
+                ),
+            );
         }
     }
 

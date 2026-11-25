@@ -101,8 +101,10 @@ impl MockToolCall {
     }
 }
 
+pub type DynamicStepFn = Arc<dyn Fn(&RecordedChatRequest) -> MockStep + Send + Sync>;
+
 /// Single scripted completion response queued on [`MockLlmServer`].
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub enum MockStep {
     Text {
         thought: Option<String>,
@@ -124,6 +126,49 @@ pub enum MockStep {
         gate: TurnGate,
         inner: Box<Self>,
     },
+    Dynamic(DynamicStepFn),
+}
+
+impl std::fmt::Debug for MockStep {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Text {
+                thought,
+                text,
+                prompt_tokens,
+                completion_tokens,
+            } => f
+                .debug_struct("Text")
+                .field("thought", thought)
+                .field("text", text)
+                .field("prompt_tokens", prompt_tokens)
+                .field("completion_tokens", completion_tokens)
+                .finish(),
+            Self::ToolCalls {
+                thought,
+                calls,
+                prompt_tokens,
+                completion_tokens,
+            } => f
+                .debug_struct("ToolCalls")
+                .field("thought", thought)
+                .field("calls", calls)
+                .field("prompt_tokens", prompt_tokens)
+                .field("completion_tokens", completion_tokens)
+                .finish(),
+            Self::HttpError { status, message } => f
+                .debug_struct("HttpError")
+                .field("status", status)
+                .field("message", message)
+                .finish(),
+            Self::Gated { gate, inner } => f
+                .debug_struct("Gated")
+                .field("gate", gate)
+                .field("inner", inner)
+                .finish(),
+            Self::Dynamic(_) => f.write_str("Dynamic(..)"),
+        }
+    }
 }
 
 impl MockStep {
@@ -167,9 +212,17 @@ impl MockStep {
                 let updated = (**inner).clone().with_usage(prompt_tokens, completion_tokens);
                 **inner = updated;
             }
-            Self::HttpError { .. } => {}
+            Self::HttpError { .. } | Self::Dynamic(_) => {}
         }
         self
+    }
+
+    #[must_use]
+    pub fn dynamic<F>(builder: F) -> Self
+    where
+        F: Fn(&RecordedChatRequest) -> Self + Send + Sync + 'static,
+    {
+        Self::Dynamic(Arc::new(builder))
     }
 
     #[must_use]
@@ -515,6 +568,7 @@ async fn handle_connection(mut stream: TcpStream, queues: Arc<Mutex<ServerQueues
 
     let want_stream = recorded.stream;
 
+    let req_snapshot = recorded.clone();
     let step = if is_aux_request(&recorded) {
         let text = {
             let mut q = queues.lock();
@@ -551,18 +605,30 @@ async fn handle_connection(mut stream: TcpStream, queues: Arc<Mutex<ServerQueues
         })
     };
 
-    respond_with_step(&mut stream, step, want_stream).await
+    respond_with_step(&mut stream, step, &req_snapshot, want_stream).await
 }
 
 async fn respond_with_step(
     stream: &mut TcpStream,
     mut step: MockStep,
+    req: &RecordedChatRequest,
     want_stream: bool,
 ) -> Result<()> {
-    while let MockStep::Gated { gate, inner } = step {
-        gate.mark_entered();
-        gate.wait_released().await;
-        step = *inner;
+    loop {
+        match step {
+            MockStep::Gated { gate, inner } => {
+                gate.mark_entered();
+                gate.wait_released().await;
+                step = *inner;
+            }
+            MockStep::Dynamic(builder) => {
+                step = builder(req);
+            }
+            other => {
+                step = other;
+                break;
+            }
+        }
     }
 
     match step {
@@ -608,7 +674,7 @@ async fn respond_with_step(
             )
             .await
         }
-        MockStep::Gated { .. } => unreachable!("unwrapped in loop above"),
+        MockStep::Gated { .. } | MockStep::Dynamic(_) => unreachable!("unwrapped in loop above"),
     }
 }
 

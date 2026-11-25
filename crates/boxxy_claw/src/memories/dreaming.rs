@@ -80,7 +80,8 @@ impl DreamOrchestrator {
         let Some(db) = db_opt else {
             return Ok(());
         };
-        let interactions = Store::new(db.pool()).get_undreamed_interactions().await?;
+        let store = Store::new(db.pool());
+        let interactions = store.get_undreamed_interactions().await?;
 
         if interactions.is_empty() {
             debug!("No new interactions to dream about.");
@@ -88,6 +89,10 @@ impl DreamOrchestrator {
         }
 
         debug!("Dreaming about {} interactions...", interactions.len());
+
+        let existing_verified = store.get_all_memories().await.unwrap_or_default();
+        let verified_context =
+            format_existing_verified_memories_for_dream(&existing_verified, &interactions);
 
         // Phase 2: Scoring & Promotion (LLM)
         let interactions_text = interactions
@@ -112,7 +117,7 @@ impl DreamOrchestrator {
             \
             Phase 1: Scoring & Extraction. Identify permanent facts (OS, hardware, preferred tools, user role) and behavioral patterns (prefers 'yarn' over 'npm', always uses 'ripgrep', works on Rust 2024 projects). \
             \
-            Phase 2: Conflict Resolution. If you see info that contradicts existing verified memories, flag it. \
+            Phase 2: Conflict Resolution. If you see info that contradicts existing verified memories, flag it using the exact existing 'key'. \
             \
             Return a JSON object with: \
             - 'facts': array of { 'key': snake_case string, 'project_path': string or 'global', 'content': string, 'confidence_score': float 0.0-1.0 (how certain you are this is a permanent, durable fact) } \
@@ -122,9 +127,16 @@ impl DreamOrchestrator {
             CRITICAL: Be extremely selective. Only extract information that is truly durable and useful for future context. Avoid transient state.",
         );
 
-        let prompt = format!(
-            "Consolidate these interactions into permanent memories and patterns:\n\n{interactions_text}"
-        );
+        let prompt = if verified_context.is_empty() {
+            format!(
+                "Consolidate these interactions into permanent memories and patterns:\n\n{interactions_text}"
+            )
+        } else {
+            format!(
+                "EXISTING VERIFIED MEMORIES (flag contradictions in 'conflicts' by 'key'):\n{verified_context}\n\n\
+                Consolidate these interactions into permanent memories and patterns:\n\n{interactions_text}"
+            )
+        };
 
         let (response, _, _) = agent
             .prompt(&prompt)
@@ -290,6 +302,45 @@ impl DreamOrchestrator {
     }
 }
 
+const MAX_DREAM_VERIFIED_FACTS: usize = 60;
+const MAX_DREAM_VERIFIED_CHARS: usize = 4_000;
+
+fn format_existing_verified_memories_for_dream(
+    memories: &[boxxy_db::models::Memory],
+    interactions: &[boxxy_db::models::Interaction],
+) -> String {
+    let mut relevant_paths = std::collections::HashSet::new();
+    relevant_paths.insert("global");
+    for item in interactions {
+        if let Some(p) = item.project_path.as_deref().filter(|s| !s.is_empty()) {
+            relevant_paths.insert(p);
+        }
+    }
+
+    let mut out = String::new();
+    let mut count = 0usize;
+    for mem in memories {
+        if mem.verified != Some(true) {
+            continue;
+        }
+        let scope = if mem.project_path.is_empty() {
+            "global"
+        } else {
+            mem.project_path.as_str()
+        };
+        if !relevant_paths.contains(scope) {
+            continue;
+        }
+        let line = format!("- [{}] {}: {}\n", scope, mem.key, mem.content);
+        if count >= MAX_DREAM_VERIFIED_FACTS || out.len() + line.len() > MAX_DREAM_VERIFIED_CHARS {
+            break;
+        }
+        out.push_str(&line);
+        count += 1;
+    }
+    out.trim_end().to_string()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -388,5 +439,55 @@ Note: {audit_complete}"#;
         // Verify interactions were marked as dreamed
         let remaining = store.get_undreamed_interactions().await.unwrap();
         assert!(remaining.is_empty());
+    }
+
+    #[tokio::test]
+    async fn format_existing_verified_memories_scopes_to_global_and_active_paths() {
+        let db = Db::new_in_memory().await.unwrap();
+        let store = Store::new(db.pool());
+        store.create_session("sess-scope", "Scope Test").await.unwrap();
+        store
+            .add_interaction("sess-scope", Some("/workspace/alpha"), "Switched bundler", None, None)
+            .await
+            .unwrap();
+        store
+            .add_memory("global_shell", None, "Uses fish", Some("system"), true, false)
+            .await
+            .unwrap();
+        store
+            .add_memory(
+                "alpha_bundler",
+                Some("/workspace/alpha"),
+                "Uses vite",
+                Some("dreamed"),
+                true,
+                false,
+            )
+            .await
+            .unwrap();
+        store
+            .add_memory(
+                "beta_unrelated",
+                Some("/workspace/beta"),
+                "Uses webpack",
+                Some("dreamed"),
+                true,
+                false,
+            )
+            .await
+            .unwrap();
+        store
+            .upsert_dream_candidate("unverified_cand", Some("/workspace/alpha"), "Draft", 0.5)
+            .await
+            .unwrap();
+
+        let all_mems = store.get_all_memories().await.unwrap();
+        let interactions = store.get_undreamed_interactions().await.unwrap();
+        let formatted = format_existing_verified_memories_for_dream(&all_mems, &interactions);
+
+        assert!(formatted.contains("[global] global_shell: Uses fish"));
+        assert!(formatted.contains("[/workspace/alpha] alpha_bundler: Uses vite"));
+        assert!(!formatted.contains("beta_unrelated"));
+        assert!(!formatted.contains("unverified_cand"));
     }
 }

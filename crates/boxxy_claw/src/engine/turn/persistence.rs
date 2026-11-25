@@ -110,6 +110,7 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
                     !trimmed.is_empty()
                         && !trimmed.starts_with("[WHILE_YOU_SLEPT]")
                         && !trimmed.starts_with(super::history::SESSION_CHECKPOINT_PREFIX)
+                        && !trimmed.starts_with(super::history::UNDO_HISTORY_PREFIX)
                 })
                 .map(str::to_string)
         })

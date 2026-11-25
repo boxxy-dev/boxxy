@@ -55,17 +55,27 @@ impl TestWorkspace {
             .tempdir()
             .context("create TestWorkspace TempDir")?;
 
-        // Ensure custom BLACKLIST.md and custom skills from an earlier test do not carry over.
-        let blacklist_file = config_root.join("boxxyclaw").join("BLACKLIST.md");
-        let _ = tokio::fs::remove_file(&blacklist_file).await;
-        let skills_dir = config_root.join("boxxyclaw").join("skills");
-        let _ = tokio::fs::remove_dir_all(&skills_dir).await;
+        // Ensure custom BLACKLIST.md, MEMORY.md, DREAMS.md, and custom skills from an earlier test do not carry over.
+        let boxxyclaw_dir = config_root.join("boxxyclaw");
+        let _ = tokio::fs::remove_file(boxxyclaw_dir.join("BLACKLIST.md")).await;
+        let _ = tokio::fs::remove_file(boxxyclaw_dir.join("MEMORY.md")).await;
+        let _ = tokio::fs::remove_file(boxxyclaw_dir.join("DREAMS.md")).await;
+        let _ = tokio::fs::remove_dir_all(boxxyclaw_dir.join("skills")).await;
         boxxy_claw::registry::skills::reload_if_initialized().await;
 
         let agent_state = AgentState::new();
         let claw_subsystem = ClawSubsystem::new(agent_state.clone());
         let env: Arc<dyn ClawEnvironment> = Arc::new(claw_subsystem);
         let db = Db::new().await.context("initialize isolated boxxy-db")?;
+        {
+            let store = boxxy_db::store::Store::new(db.pool());
+            if let Ok(stale) = store.get_undreamed_interactions().await
+                && !stale.is_empty()
+            {
+                let ids: Vec<i64> = stale.into_iter().map(|i| i.id).collect();
+                let _ = store.mark_interactions_as_dreamed(&ids).await;
+            }
+        }
 
         set_active_claims(Vec::new());
 

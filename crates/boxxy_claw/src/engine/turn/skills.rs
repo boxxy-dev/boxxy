@@ -37,15 +37,12 @@ pub async fn build_skills_context(prompt: &str, pane_id: &str) -> (String, Strin
         }
     }
 
-    if !pane_id.is_empty() {
-        let active_names: Vec<String> = active_skills
-            .iter()
-            .map(|s| s.frontmatter.name.clone())
-            .collect();
-        crate::registry::workspace::global_workspace()
-            .await
-            .update_pane_skills(pane_id.to_string(), active_names)
-            .await;
+    if !pane_id.is_empty() && !active_skills.is_empty() {
+        let ws = crate::registry::workspace::global_workspace().await;
+        for skill in &active_skills {
+            ws.add_pane_skill(pane_id, skill.frontmatter.name.clone())
+                .await;
+        }
     }
 
     if !active_skills.is_empty() {

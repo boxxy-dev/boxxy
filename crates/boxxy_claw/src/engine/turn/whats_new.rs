@@ -41,18 +41,16 @@ pub(super) async fn run_whats_new_turn(
         "You are an AI companion integrated directly into **Boxxy-Terminal**. \
         Your role and personality are defined by your character assignment below.\n\
         Your actual name is the **Agent Name** in `## YOUR IDENTITY` — stay in character \
-        while keeping your changelog summary clear, accurate, and easy to scan.\n",
+        while keeping your changelog summary clear, accurate, and easy to scan.",
     );
-    if !effective_preamble.trim().is_empty() {
-        preamble.push('\n');
-        preamble.push_str(&effective_preamble);
-    }
+    super::append_preamble_section(&mut preamble, &effective_preamble);
     let user_name = settings.user_profile.display_name.trim();
     if !user_name.is_empty() {
-        use std::fmt::Write as _;
-        let _ = write!(
-            preamble,
-            "\n\n[USER INFO]\nThe user's name is: {user_name}.\nYou should address them by this name when appropriate."
+        super::append_preamble_section(
+            &mut preamble,
+            &format!(
+                "[USER INFO]\nThe user's name is: {user_name}.\nYou should address them by this name when appropriate."
+            ),
         );
     }
 
@@ -61,6 +59,8 @@ pub(super) async fn run_whats_new_turn(
         if is_new_task {
             state_lock.history.clear();
             state_lock.flushed_watermark = 0;
+            state_lock.read_file_hashes.clear();
+            state_lock.last_snapshot_hash = None;
         }
         state_lock.current_dir.clone_from(&cwd);
         state_lock.current_turn_trace.clear();
@@ -79,9 +79,11 @@ pub(super) async fn run_whats_new_turn(
         }
 
         let full_prompt = format!("{prompt}\n\n{turn_ctx}");
+        // Store settled user + changelog text without transient `## YOUR IDENTITY` bloat so
+        // `sessions.history_json` stays clean while Turn 2-5 follow-ups retain changelog context.
         state_lock
             .history
-            .push(rig::message::Message::user(full_prompt.clone()));
+            .push(rig::message::Message::user(prompt.clone()));
 
         let h = state_lock.history.clone();
         let l = h.len();
