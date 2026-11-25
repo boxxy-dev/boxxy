@@ -1,4 +1,4 @@
-use std::sync::Weak;
+use std::sync::{Arc, Weak};
 
 use rmcp::{
     ClientHandler,
@@ -14,12 +14,12 @@ use crate::manager::McpClientManager;
 /// invalidates the local tool cache when a server emits `notifications/tools/list_changed`.
 #[derive(Clone)]
 pub struct BoxxyClientHandler {
-    server_name: String,
+    server_name: Arc<str>,
     manager: Weak<McpClientManager>,
 }
 
 impl BoxxyClientHandler {
-    pub fn new(server_name: impl Into<String>, manager: Weak<McpClientManager>) -> Self {
+    pub fn new(server_name: impl Into<Arc<str>>, manager: Weak<McpClientManager>) -> Self {
         Self {
             server_name: server_name.into(),
             manager,

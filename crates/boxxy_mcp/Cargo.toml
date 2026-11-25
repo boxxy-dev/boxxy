@@ -43,7 +43,7 @@ rig = { workspace = true, optional = true }
 rmcp = { workspace = true, optional = true }
 serde_json = { workspace = true, optional = true }
 thiserror = { workspace = true, optional = true }
-tokio = { workspace = true, optional = true, features = ["net", "process", "sync", "time", "macros", "rt"] }
+tokio = { workspace = true, optional = true, features = ["io-util", "net", "process", "sync", "time", "macros", "rt"] }
 
 [dev-dependencies]
 serde_json.workspace = true

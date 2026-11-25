@@ -24,7 +24,7 @@ use crate::config::MIN_TIMEOUT_MS;
 /// Maximum number of same-origin 307/308 redirects followed per request.
 const MAX_REDIRECTS: usize = 10;
 
-/// Redirect policy matching `rmcp 3.10.0`'s Streamable HTTP semantics:
+/// Redirect policy matching `rmcp 3.11.0`'s Streamable HTTP semantics:
 /// follows only same-origin 307/308 redirects (up to 10 hops) so JSON-RPC POST
 /// bodies are preserved and custom headers / session IDs are never leaked to
 /// another origin or rewritten into bodyless GET requests (301/302/303).
@@ -47,10 +47,7 @@ pub(crate) fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
             log::debug!(
                 "MCP HTTP following same-origin redirect ({}): {} -> {}",
                 attempt.status(),
-                attempt
-                    .previous()
-                    .last()
-                    .map_or("", reqwest::Url::path),
+                attempt.previous().last().map_or("", reqwest::Url::path),
                 attempt.url().path(),
             );
             attempt.follow()
@@ -58,7 +55,16 @@ pub(crate) fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
     })
 }
 
-/// Returns `true` if `url` points to a loopback host (`localhost`, `127.0.0.1`, `[::1]`).
+fn is_localhost_domain(host: &str) -> bool {
+    let bare = host.strip_suffix('.').unwrap_or(host);
+    if bare.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    bare.len() > ".localhost".len()
+        && bare.as_bytes()[bare.len() - ".localhost".len()..].eq_ignore_ascii_case(b".localhost")
+}
+
+/// Returns `true` if `url` points to a loopback host (`localhost`, `*.localhost`, `127.0.0.0/8`, `[::1]`).
 #[must_use]
 pub fn is_loopback_http_url(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url.trim()) else {
@@ -67,7 +73,7 @@ pub fn is_loopback_http_url(url: &str) -> bool {
     let Some(host_str) = parsed.host_str() else {
         return false;
     };
-    if host_str.eq_ignore_ascii_case("localhost") {
+    if is_localhost_domain(host_str) {
         return true;
     }
     let trimmed = host_str.trim_start_matches('[').trim_end_matches(']');
@@ -87,7 +93,7 @@ pub async fn probe_loopback_http_port(url: &str) -> bool {
     let port = parsed.port_or_known_default().unwrap_or(80);
     let trimmed_host = host_str.trim_start_matches('[').trim_end_matches(']');
 
-    if trimmed_host.eq_ignore_ascii_case("localhost") {
+    if is_localhost_domain(trimmed_host) {
         let v4 = std::net::SocketAddr::from(([127, 0, 0, 1], port));
         let v6 = std::net::SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], port));
         tokio::time::timeout(
@@ -121,7 +127,9 @@ enum AuthorizationDisposition {
 
 /// Parses an `Authorization` header value safely without UTF-8 byte-slice panics
 /// and without corrupting non-Bearer authentication schemes (`Basic`, `ApiKey`, `Token`).
-fn parse_authorization_header(raw_value: &str) -> Result<AuthorizationDisposition, PermanentConfigError> {
+fn parse_authorization_header(
+    raw_value: &str,
+) -> Result<AuthorizationDisposition, PermanentConfigError> {
     let trimmed = raw_value.trim();
     if trimmed.is_empty() || trimmed.eq_ignore_ascii_case("bearer") {
         return Ok(AuthorizationDisposition::Skip);
@@ -228,10 +236,15 @@ pub async fn build_streamable_http_client<S: BuildHasher + Sync>(
     }
 
     let is_loopback = is_loopback_http_url(trimmed_url);
+    // Deliberately omit a client-wide `.timeout(request_timeout)` here: in `reqwest`,
+    // `.timeout()` caps total body stream lifetime and would prematurely sever stateful
+    // `2025-11-25` long-lived SSE GET notification streams every `timeout_ms`. Individual
+    // handshakes, `tools/list`, and `tools/call` enforce `tokio::time::timeout` directly
+    // (dropping `rmcp`'s `AbandonedRequestGuard` to cancel the exact in-flight POST).
     let mut client_builder = reqwest::Client::builder()
         .redirect(same_origin_redirect_policy())
-        .connect_timeout(Duration::from_secs(10))
-        .timeout(request_timeout);
+        .connect_timeout(request_timeout.min(Duration::from_secs(10)))
+        .tcp_nodelay(true);
 
     if is_loopback {
         // Avoid retaining idle sockets against local dev servers that may restart frequently.
@@ -326,10 +339,12 @@ mod tests {
     }
 
     #[test]
-    fn loopback_url_detection_covers_ipv4_ipv6_and_localhost() {
+    fn loopback_url_detection_covers_ipv4_ipv6_and_rfc6761_localhost_subdomains() {
         assert!(is_loopback_http_url("http://localhost:3000/mcp"));
+        assert!(is_loopback_http_url("http://mcp.LOCALHOST:3000/mcp"));
         assert!(is_loopback_http_url("http://127.0.0.1:8080/mcp"));
         assert!(is_loopback_http_url("http://[::1]:9000/mcp"));
+        assert!(!is_loopback_http_url("https://notlocalhost.com/mcp"));
         assert!(!is_loopback_http_url("https://example.com/mcp"));
         assert!(!is_loopback_http_url("not-a-url"));
     }

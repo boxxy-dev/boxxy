@@ -1,10 +1,37 @@
-use rig::message::{ImageMediaType, MimeType, ToolResultContent};
+use rig::message::{ImageMediaType, ToolResultContent};
 use rig::tool::{ToolExecutionError, ToolOutput};
 use rmcp::model::{CallToolResult, ContentBlock, ResourceContents};
 use serde_json::Value;
 
-/// Builds both the compact human/observer summary string (for the Claw sidebar & SQLite log)
-/// and the `rig::tool::ToolOutput` sent to the model (preserving multimodal images natively).
+const EMPTY_ERROR_FALLBACK: &str = "MCP tool reported an execution error";
+
+/// Normalizes an MCP MIME type (stripping `; ...` parameters, handling case-insensitivity
+/// and `image/jpg` aliases) into a `rig::message::ImageMediaType`.
+fn parse_image_media_type(raw_mime: &str) -> Option<ImageMediaType> {
+    let essence = raw_mime.split(';').next().unwrap_or(raw_mime).trim();
+    if essence.eq_ignore_ascii_case("image/jpeg") || essence.eq_ignore_ascii_case("image/jpg") {
+        Some(ImageMediaType::JPEG)
+    } else if essence.eq_ignore_ascii_case("image/png") {
+        Some(ImageMediaType::PNG)
+    } else if essence.eq_ignore_ascii_case("image/gif") {
+        Some(ImageMediaType::GIF)
+    } else if essence.eq_ignore_ascii_case("image/webp") {
+        Some(ImageMediaType::WEBP)
+    } else if essence.eq_ignore_ascii_case("image/heic") {
+        Some(ImageMediaType::HEIC)
+    } else if essence.eq_ignore_ascii_case("image/heif") {
+        Some(ImageMediaType::HEIF)
+    } else if essence.eq_ignore_ascii_case("image/svg+xml") {
+        Some(ImageMediaType::SVG)
+    } else {
+        None
+    }
+}
+
+/// Builds both the compact observer summary string and the `rig::tool::ToolOutput`.
+///
+/// Preserves multimodal images and SEP-2106 structured JSON natively while supporting
+/// `rmcp 3.11`'s contentless `CallToolResult`s.
 ///
 /// # Errors
 ///
@@ -12,30 +39,79 @@ use serde_json::Value;
 pub fn build_tool_outputs(
     result: &CallToolResult,
 ) -> Result<(String, ToolOutput), ToolExecutionError> {
-    let summary = format_call_tool_result(result);
+    let is_error = result.is_error == Some(true);
+    let mut summary = format_call_tool_result(result);
+    if summary.is_empty() && is_error {
+        summary = EMPTY_ERROR_FALLBACK.to_string();
+    }
 
     if has_supported_image_block(&result.content) {
         let multimodal = build_multimodal_output(result)?;
         return Ok((summary, multimodal));
     }
 
-    let model_text = if summary.is_empty() && result.is_error == Some(true) {
-        "MCP tool reported an execution error".to_string()
-    } else {
-        summary.clone()
-    };
+    if let Some(structured) = &result.structured_content {
+        if structured.is_null() {
+            if result.content.is_empty() && !is_error {
+                return Ok((summary, ToolOutput::json(Value::Null)));
+            }
+            return Ok((summary.clone(), ToolOutput::text(summary)));
+        }
 
-    Ok((summary, ToolOutput::text(model_text)))
+        let rendered_blocks: Vec<String> = result
+            .content
+            .iter()
+            .map(format_content_block)
+            .filter(|s| !s.is_empty())
+            .collect();
+        let text_body = rendered_blocks.join("\n\n");
+
+        if text_body.is_empty() {
+            return Ok((summary, value_to_tool_output(structured)));
+        }
+
+        if let Some(inner_str) = unwrap_single_result_field(structured).and_then(Value::as_str)
+            && text_body.trim() == inner_str.trim()
+        {
+            return Ok((summary, ToolOutput::text(text_body)));
+        }
+
+        let structured_str =
+            serde_json::to_string(structured).unwrap_or_else(|_| structured.to_string());
+        if is_redundant_text_representation(
+            &rendered_blocks,
+            &text_body,
+            structured,
+            &structured_str,
+        ) {
+            return Ok((summary, value_to_tool_output(structured)));
+        }
+
+        let combined = ToolOutput::content(vec![
+            ToolResultContent::text(text_body),
+            ToolResultContent::json(structured.clone()),
+        ])?;
+        return Ok((summary, combined));
+    }
+
+    Ok((summary.clone(), ToolOutput::text(summary)))
+}
+
+fn value_to_tool_output(val: &Value) -> ToolOutput {
+    match val {
+        Value::String(s) => ToolOutput::text(s.clone()),
+        other => ToolOutput::json(other.clone()),
+    }
 }
 
 fn has_supported_image_block(blocks: &[ContentBlock]) -> bool {
     blocks.iter().any(|block| match block {
-        ContentBlock::Image(img) => ImageMediaType::from_mime_type(&img.mime_type).is_some(),
+        ContentBlock::Image(img) => parse_image_media_type(&img.mime_type).is_some(),
         ContentBlock::Resource(embedded) => match &embedded.resource {
             ResourceContents::BlobResourceContents {
                 mime_type: Some(mime),
                 ..
-            } => ImageMediaType::from_mime_type(mime).is_some(),
+            } => parse_image_media_type(mime).is_some(),
             _ => false,
         },
         _ => false,
@@ -54,7 +130,7 @@ fn build_multimodal_output(result: &CallToolResult) -> Result<ToolOutput, ToolEx
     for block in &result.content {
         match block {
             ContentBlock::Image(img) => {
-                if let Some(media_type) = ImageMediaType::from_mime_type(&img.mime_type) {
+                if let Some(media_type) = parse_image_media_type(&img.mime_type) {
                     parts.push(ToolResultContent::image_base64(
                         img.data.clone(),
                         Some(media_type),
@@ -69,8 +145,8 @@ fn build_multimodal_output(result: &CallToolResult) -> Result<ToolOutput, ToolEx
                     mime_type: Some(mime),
                     blob,
                     ..
-                } if ImageMediaType::from_mime_type(mime).is_some() => {
-                    let media_type = ImageMediaType::from_mime_type(mime);
+                } if parse_image_media_type(mime).is_some() => {
+                    let media_type = parse_image_media_type(mime);
                     parts.push(ToolResultContent::image_base64(
                         blob.clone(),
                         media_type,
@@ -304,8 +380,7 @@ mod tests {
 
     #[test]
     fn format_call_tool_result_formats_errors_cleanly() {
-        let res =
-            CallToolResult::error(vec![ContentBlock::text("Permission denied: /etc/shadow")]);
+        let res = CallToolResult::error(vec![ContentBlock::text("Permission denied: /etc/shadow")]);
         assert_eq!(
             format_call_tool_result(&res),
             "Permission denied: /etc/shadow"
@@ -313,13 +388,31 @@ mod tests {
     }
 
     #[test]
-    fn format_call_tool_result_handles_structured_content() {
+    fn format_call_tool_result_handles_structured_content_and_preserves_json_output() {
         let mut res = CallToolResult::success(vec![]);
-        res.structured_content = Some(json!({"count": 42, "items": ["a", "b"]}));
+        let payload = json!({"count": 42, "items": ["a", "b"]});
+        res.structured_content = Some(payload.clone());
         assert_eq!(
             format_call_tool_result(&res),
             r#"{"count":42,"items":["a","b"]}"#
         );
+
+        let (summary, output) = build_tool_outputs(&res).expect("valid structured output");
+        assert_eq!(summary, r#"{"count":42,"items":["a","b"]}"#);
+        assert_eq!(output.as_json(), Some(&payload));
+    }
+
+    #[test]
+    fn build_tool_outputs_handles_contentless_results_and_empty_errors() {
+        let empty_ok = CallToolResult::default();
+        let (summary, output) = build_tool_outputs(&empty_ok).expect("contentless ok result");
+        assert_eq!(summary, "");
+        assert_eq!(output.as_text(), Some(""));
+
+        let empty_err = CallToolResult::error(vec![]);
+        let (err_summary, err_output) = build_tool_outputs(&empty_err).expect("empty error result");
+        assert_eq!(err_summary, EMPTY_ERROR_FALLBACK);
+        assert_eq!(err_output.as_text(), Some(EMPTY_ERROR_FALLBACK));
     }
 
     #[test]
@@ -327,11 +420,13 @@ mod tests {
         let payload = json!({"status": "ok", "items": [1, 2, 3]});
         let pretty_text = serde_json::to_string_pretty(&payload).unwrap();
         let mut res = CallToolResult::success(vec![ContentBlock::text(pretty_text)]);
-        res.structured_content = Some(payload);
+        res.structured_content = Some(payload.clone());
         assert_eq!(
             format_call_tool_result(&res),
             r#"{"status":"ok","items":[1,2,3]}"#
         );
+        let (_, dedup_output) = build_tool_outputs(&res).unwrap();
+        assert_eq!(dedup_output.as_json(), Some(&payload));
 
         let item1 = json!({"a": 1});
         let item2 = json!({"b": 2});
@@ -351,13 +446,13 @@ mod tests {
     }
 
     #[test]
-    fn build_tool_outputs_preserves_multimodal_images_while_keeping_observer_summary_compact() {
+    fn build_tool_outputs_preserves_multimodal_images_and_normalizes_mime_variants() {
         let res = CallToolResult::success(vec![
             ContentBlock::text("Captured viewport"),
-            ContentBlock::image("iVBORw0KGgoAAAANSUhEUg==", "image/png"),
+            ContentBlock::image("iVBORw0KGgoAAAANSUhEUg==", "IMAGE/JPG; charset=binary"),
         ]);
         let (summary, output) = build_tool_outputs(&res).expect("valid multimodal output");
-        assert!(summary.contains("[Image (image/png, 24 bytes base64)]"));
+        assert!(summary.contains("[Image (IMAGE/JPG; charset=binary, 24 bytes base64)]"));
         assert!(!summary.contains("iVBORw0KGgoAAAANSUhEUg=="));
 
         let parts = output.into_content();

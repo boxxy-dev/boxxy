@@ -1,4 +1,6 @@
 mod breaker;
+#[cfg(test)]
+mod tests;
 
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Weak};
@@ -9,7 +11,7 @@ use log::{debug, error, info, warn};
 use parking_lot::Mutex as SyncMutex;
 use rmcp::RoleClient;
 use rmcp::model::Tool as McpToolDefinition;
-use rmcp::service::RunningService;
+use rmcp::service::{MAX_CLIENT_CACHE_TTL, RunningService, ServiceError};
 use tokio::sync::{Mutex as AsyncMutex, OnceCell, RwLock};
 
 pub use self::breaker::CircuitBreakerOpenError;
@@ -24,19 +26,43 @@ use crate::rig_bridge::tool::{DynamicMcpTool, McpToolObserver};
 
 pub type McpClientWrapper = RunningService<RoleClient, BoxxyClientHandler>;
 
-/// Grace period for `RunningService::close_with_timeout`: accommodates `rmcp 3.10`'s
+/// Grace period for `RunningService::close_with_timeout`: accommodates `rmcp 3.11`'s
 /// 3s stdin-EOF wait + `SIGTERM` + 3s wait on Stdio and 5s `DELETE` cleanup on HTTP.
 const GRACEFUL_CLOSE_TIMEOUT: Duration = Duration::from_secs(7);
+
+#[derive(Debug, Clone)]
+pub(super) struct CachedToolList {
+    pub(super) tools: Vec<McpToolDefinition>,
+    /// Optional expiration derived from `rmcp 3.11`'s merged `ttlMs` cache hint across pages.
+    /// `None` when the server omitted `ttlMs` (e.g. stateful `2025-11-25` sessions that
+    /// invalidate via `notifications/tools/list_changed`).
+    pub(super) expires_at: Option<Instant>,
+}
+
+impl CachedToolList {
+    fn is_fresh(&self, now: Instant) -> bool {
+        self.expires_at.is_none_or(|exp| now < exp)
+    }
+}
+
+enum ToolFetchOutcome {
+    Ready(Vec<McpToolDefinition>),
+    AuthRequired(String),
+    SessionClosed,
+    Failed,
+}
 
 pub struct McpClientManager {
     self_weak: Weak<Self>,
     configs: RwLock<HashMap<String, McpServerConfig>>,
     active_clients: RwLock<HashMap<String, Arc<McpClientWrapper>>>,
-    tool_cache: RwLock<HashMap<String, Vec<McpToolDefinition>>>,
+    tool_cache: RwLock<HashMap<String, CachedToolList>>,
     failed_servers: RwLock<HashMap<String, CircuitBreakerState>>,
     /// Per-server single-flight mutex preventing duplicate process spawns / HTTP handshakes
     /// when concurrent callers invoke `ensure_client` for the same disconnected server.
     connect_locks: SyncMutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+    /// Per-server single-flight mutex coalescing concurrent cold `tools/list` fetches.
+    tool_fetch_locks: SyncMutex<HashMap<String, Arc<AsyncMutex<()>>>>,
     /// Monotonic per-server generation counter preventing an in-flight `list_all_tools`
     /// response from overwriting a concurrent `notifications/tools/list_changed` invalidation.
     cache_generations: SyncMutex<HashMap<String, u64>>,
@@ -61,18 +87,30 @@ impl McpClientManager {
             tool_cache: RwLock::new(HashMap::new()),
             failed_servers: RwLock::new(HashMap::new()),
             connect_locks: SyncMutex::new(HashMap::new()),
+            tool_fetch_locks: SyncMutex::new(HashMap::new()),
             cache_generations: SyncMutex::new(HashMap::new()),
         })
     }
 
-    fn server_connect_lock(&self, server_name: &str) -> Arc<AsyncMutex<()>> {
-        let mut locks = self.connect_locks.lock();
+    fn named_async_lock(
+        table: &SyncMutex<HashMap<String, Arc<AsyncMutex<()>>>>,
+        server_name: &str,
+    ) -> Arc<AsyncMutex<()>> {
+        let mut locks = table.lock();
         if let Some(existing) = locks.get(server_name) {
             return existing.clone();
         }
         let created = Arc::new(AsyncMutex::new(()));
         locks.insert(server_name.to_string(), created.clone());
         created
+    }
+
+    fn server_connect_lock(&self, server_name: &str) -> Arc<AsyncMutex<()>> {
+        Self::named_async_lock(&self.connect_locks, server_name)
+    }
+
+    fn server_tool_fetch_lock(&self, server_name: &str) -> Arc<AsyncMutex<()>> {
+        Self::named_async_lock(&self.tool_fetch_locks, server_name)
     }
 
     fn current_generation(&self, server_name: &str) -> u64 {
@@ -111,6 +149,51 @@ impl McpClientManager {
                 shared_client.cancellation_token().cancel();
             }
         }
+    }
+
+    /// Evicts `expected` from `active_clients` and invalidates its cached tools if and only if
+    /// `expected` is still the registered client instance for `server_name`.
+    pub(crate) async fn evict_if_same_client(
+        &self,
+        server_name: &str,
+        expected: &Arc<McpClientWrapper>,
+    ) -> bool {
+        let evicted = {
+            let mut clients = self.active_clients.write().await;
+            if clients
+                .get(server_name)
+                .is_some_and(|cur| Arc::ptr_eq(cur, expected))
+            {
+                clients.remove(server_name)
+            } else {
+                None
+            }
+        };
+        if let Some(dead) = evicted {
+            self.bump_generation(server_name);
+            self.tool_cache.write().await.remove(server_name);
+            Self::shutdown_client_gracefully(server_name, dead);
+            true
+        } else {
+            false
+        }
+    }
+
+    async fn trip_permanent_breaker(
+        &self,
+        server_name: &str,
+        client: &Arc<McpClientWrapper>,
+        reason: String,
+    ) {
+        self.evict_if_same_client(server_name, client).await;
+        self.failed_servers.write().await.insert(
+            server_name.to_string(),
+            CircuitBreakerState {
+                tripped_at: Instant::now(),
+                cooldown: PERMANENT_CONFIG_COOLDOWN,
+                last_error: reason,
+            },
+        );
     }
 
     /// Synchronizes the active server configurations with the user's preferences.
@@ -172,10 +255,15 @@ impl McpClientManager {
         }
 
         if !removed_completely.is_empty() {
-            let mut locks = self.connect_locks.lock();
-            for name in &removed_completely {
-                if locks.get(name).is_some_and(|arc| Arc::strong_count(arc) == 1) {
-                    locks.remove(name);
+            for table in [&self.connect_locks, &self.tool_fetch_locks] {
+                let mut locks = table.lock();
+                for name in &removed_completely {
+                    if locks
+                        .get(name)
+                        .is_some_and(|arc| Arc::strong_count(arc) == 1)
+                    {
+                        locks.remove(name);
+                    }
                 }
             }
         }
@@ -203,11 +291,14 @@ impl McpClientManager {
         }
     }
 
-    /// Invalidates the local tool cache for a specific server (called when
-    /// `notifications/tools/list_changed` is received from the peer).
+    /// Invalidates the local tool cache (and `rmcp`'s per-page response cache) for a server.
     pub async fn invalidate_tool_cache(&self, server_name: &str) {
         self.bump_generation(server_name);
         self.tool_cache.write().await.remove(server_name);
+        let client_opt = self.active_clients.read().await.get(server_name).cloned();
+        if let Some(client) = client_opt {
+            client.peer().clear_response_cache().await;
+        }
     }
 
     /// Ensures a live client connection exists for `server_name`, coalescing concurrent
@@ -376,8 +467,18 @@ impl McpClientManager {
         Err(final_err)
     }
 
-    /// Returns the cached tools for a server. If not cached (or if the underlying client
-    /// connection has closed), connects and fetches all tool pages via `list_all_tools()`.
+    async fn read_fresh_cached_tools(&self, server_name: &str) -> Option<Vec<McpToolDefinition>> {
+        let now = Instant::now();
+        let cache = self.tool_cache.read().await;
+        cache
+            .get(server_name)
+            .filter(|entry| entry.is_fresh(now))
+            .map(|entry| entry.tools.clone())
+    }
+
+    /// Returns the cached tools for a server. If not cached, expired per SEP-2549 `ttlMs`,
+    /// or if the underlying client connection has closed, connects and fetches all tool pages
+    /// via `list_all_tools_with_cache_hint()`.
     pub async fn get_tools(&self, server_name: &str) -> Option<Vec<McpToolDefinition>> {
         let client = match self.ensure_client(server_name).await {
             Ok(c) => c,
@@ -391,11 +492,58 @@ impl McpClientManager {
             }
         };
 
-        let cached = self.tool_cache.read().await.get(server_name).cloned();
-        if let Some(tools) = cached {
+        if let Some(tools) = self.read_fresh_cached_tools(server_name).await {
             return Some(tools);
         }
 
+        let fetch_gate = self.server_tool_fetch_lock(server_name);
+        let _fetch_guard = fetch_gate.lock().await;
+
+        if let Some(tools) = self.read_fresh_cached_tools(server_name).await {
+            return Some(tools);
+        }
+
+        match self.fetch_tools_once(server_name, &client).await {
+            ToolFetchOutcome::Ready(tools) => Some(tools),
+            ToolFetchOutcome::AuthRequired(reason) => {
+                warn!(
+                    "MCP server '{server_name}' rejected tools/list with authorization challenge; entering cooldown."
+                );
+                self.trip_permanent_breaker(server_name, &client, reason)
+                    .await;
+                None
+            }
+            ToolFetchOutcome::SessionClosed => {
+                info!(
+                    "MCP session for '{server_name}' closed before tools/list completed; reconnecting once..."
+                );
+                self.evict_if_same_client(server_name, &client).await;
+                let reconnected = match self.ensure_client(server_name).await {
+                    Ok(c) => c,
+                    Err(e) => {
+                        error!("Failed to reconnect to MCP server '{server_name}': {e}");
+                        return None;
+                    }
+                };
+                match self.fetch_tools_once(server_name, &reconnected).await {
+                    ToolFetchOutcome::Ready(tools) => Some(tools),
+                    ToolFetchOutcome::AuthRequired(reason) => {
+                        self.trip_permanent_breaker(server_name, &reconnected, reason)
+                            .await;
+                        None
+                    }
+                    ToolFetchOutcome::SessionClosed | ToolFetchOutcome::Failed => None,
+                }
+            }
+            ToolFetchOutcome::Failed => None,
+        }
+    }
+
+    async fn fetch_tools_once(
+        &self,
+        server_name: &str,
+        client: &Arc<McpClientWrapper>,
+    ) -> ToolFetchOutcome {
         let start_gen = self.current_generation(server_name);
 
         // Do not send `tools/list` to an MCP server whose handshake declared no tools capability.
@@ -403,40 +551,90 @@ impl McpClientManager {
             .peer_info()
             .is_some_and(|info| info.capabilities.tools.is_none())
         {
-            self.commit_tools_if_current(server_name, &client, start_gen, Vec::new())
-                .await;
-            return Some(Vec::new());
+            self.commit_tools_if_current(
+                server_name,
+                client,
+                start_gen,
+                CachedToolList {
+                    tools: Vec::new(),
+                    expires_at: None,
+                },
+            )
+            .await;
+            return ToolFetchOutcome::Ready(Vec::new());
         }
 
-        let timeout = self
-            .configs
-            .read()
-            .await
-            .get(server_name)
-            .map_or_else(|| Duration::from_millis(60_000), McpServerConfig::effective_timeout);
+        let timeout = self.configs.read().await.get(server_name).map_or_else(
+            || Duration::from_millis(60_000),
+            McpServerConfig::effective_timeout,
+        );
 
-        let tools = match tokio::time::timeout(timeout, client.list_all_tools()).await {
-            Ok(Ok(tools)) => tools,
-            Ok(Err(e)) => {
-                error!(
-                    "Failed to list tools for MCP server '{server_name}': {}",
-                    format_service_error(&e)
-                );
-                return None;
+        let merged =
+            match tokio::time::timeout(timeout, client.list_all_tools_with_cache_hint()).await {
+                Ok(Ok(merged)) => merged,
+                Ok(Err(e)) => {
+                    let formatted = format_service_error(&e);
+                    if e.is_authorization_required() {
+                        error!("Failed to list tools for MCP server '{server_name}': {formatted}");
+                        return ToolFetchOutcome::AuthRequired(formatted);
+                    }
+                    if matches!(e, ServiceError::TransportClosed)
+                        || client.is_closed()
+                        || client.is_transport_closed()
+                    {
+                        return ToolFetchOutcome::SessionClosed;
+                    }
+                    error!("Failed to list tools for MCP server '{server_name}': {formatted}");
+                    return ToolFetchOutcome::Failed;
+                }
+                Err(_) => {
+                    error!(
+                        "Timed out after {}ms listing tools for MCP server '{server_name}'",
+                        timeout.as_millis()
+                    );
+                    return ToolFetchOutcome::Failed;
+                }
+            };
+
+        // Honor SEP-2549 merged cache hints across paginated `tools/list` responses:
+        // - `Some(0)`: server explicitly forbids caching (dynamic tool catalog).
+        // - `Some(ms)`: cache up to the earliest page expiry, bounded by `MAX_CLIENT_CACHE_TTL`.
+        // - `None`: server omitted `ttlMs` (legacy stateful session); cache until `list_changed`.
+        match merged.ttl_ms {
+            Some(0) => {
+                if self.current_generation(server_name) == start_gen {
+                    self.tool_cache.write().await.remove(server_name);
+                }
             }
-            Err(_) => {
-                error!(
-                    "Timed out after {}ms listing tools for MCP server '{server_name}'",
-                    timeout.as_millis()
-                );
-                return None;
+            Some(ms) => {
+                let bounded_ttl = Duration::from_millis(ms).min(MAX_CLIENT_CACHE_TTL);
+                let expires_at = Instant::now().checked_add(bounded_ttl);
+                self.commit_tools_if_current(
+                    server_name,
+                    client,
+                    start_gen,
+                    CachedToolList {
+                        tools: merged.items.clone(),
+                        expires_at,
+                    },
+                )
+                .await;
             }
-        };
+            None => {
+                self.commit_tools_if_current(
+                    server_name,
+                    client,
+                    start_gen,
+                    CachedToolList {
+                        tools: merged.items.clone(),
+                        expires_at: None,
+                    },
+                )
+                .await;
+            }
+        }
 
-        self.commit_tools_if_current(server_name, &client, start_gen, tools.clone())
-            .await;
-
-        Some(tools)
+        ToolFetchOutcome::Ready(merged.items)
     }
 
     async fn commit_tools_if_current(
@@ -444,7 +642,7 @@ impl McpClientManager {
         server_name: &str,
         client: &Arc<McpClientWrapper>,
         expected_gen: u64,
-        tools: Vec<McpToolDefinition>,
+        entry: CachedToolList,
     ) {
         let still_same_client = self
             .active_clients
@@ -460,7 +658,7 @@ impl McpClientManager {
             self.tool_cache
                 .write()
                 .await
-                .insert(server_name.to_string(), tools);
+                .insert(server_name.to_string(), entry);
         } else {
             debug!(
                 "MCP: Skipping stale tool-list cache commit for '{server_name}' after concurrent invalidation"
@@ -468,7 +666,11 @@ impl McpClientManager {
         }
     }
 
-    async fn check_single_server_status(&self, name: String, cfg: McpServerConfig) -> (String, bool) {
+    async fn check_single_server_status(
+        &self,
+        name: String,
+        cfg: McpServerConfig,
+    ) -> (String, bool) {
         let loopback_url = match &cfg.transport {
             McpTransport::Http { url, .. } if is_loopback_http_url(url) => Some(url.as_str()),
             _ => None,
@@ -569,10 +771,14 @@ impl McpClientManager {
         }
         server_configs.sort_by(|a, b| a.0.cmp(&b.0));
 
-        let fetched = join_all(server_configs.into_iter().map(|(name, timeout_ms)| async move {
-            let tools = self.get_tools(&name).await;
-            (name, timeout_ms, tools)
-        }))
+        let fetched = join_all(
+            server_configs
+                .into_iter()
+                .map(|(name, timeout_ms)| async move {
+                    let tools = self.get_tools(&name).await;
+                    (name, timeout_ms, tools)
+                }),
+        )
         .await;
 
         let mut rig_tools: Vec<rig::tool::DynamicTool> = Vec::new();
@@ -606,9 +812,7 @@ impl McpClientManager {
 
                 let tool_name = dynamic_tool.name();
                 if !seen_names.insert(tool_name.clone()) {
-                    warn!(
-                        "MCP: Skipping duplicate tool name '{tool_name}' from server '{name}'"
-                    );
+                    warn!("MCP: Skipping duplicate tool name '{tool_name}' from server '{name}'");
                     continue;
                 }
 
@@ -619,368 +823,5 @@ impl McpClientManager {
         }
 
         rig_tools
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::client::error::PermanentConfigError;
-    use crate::config::BackoffConfig;
-    use std::sync::atomic::{AtomicUsize, Ordering};
-
-    fn sample_stdio_config(name: &str, cmd: &str) -> McpServerConfig {
-        McpServerConfig {
-            name: name.to_string(),
-            transport: McpTransport::Stdio {
-                command: cmd.to_string(),
-                args: vec![],
-                env: HashMap::new(),
-            },
-            enabled: true,
-            timeout_ms: 5_000,
-            max_retries: 1,
-            backoff: BackoffConfig::default(),
-        }
-    }
-
-    #[tokio::test]
-    async fn update_configs_filters_disabled_and_invalidates_modified() {
-        let manager = McpClientManager::new();
-
-        let cfg1 = sample_stdio_config("alpha", "echo");
-        let mut cfg2 = sample_stdio_config("beta", "echo");
-        cfg2.enabled = false;
-
-        manager.update_configs(vec![cfg1.clone(), cfg2]).await;
-
-        assert!(manager.configs.read().await.contains_key("alpha"));
-        assert!(!manager.configs.read().await.contains_key("beta"));
-
-        manager
-            .tool_cache
-            .write()
-            .await
-            .insert("alpha".to_string(), vec![]);
-
-        // Updating with identical config preserves the tool cache.
-        manager.update_configs(vec![cfg1]).await;
-        assert!(manager.tool_cache.read().await.contains_key("alpha"));
-
-        // Modifying transport command invalidates the cache and bumps generation.
-        let gen_before = manager.current_generation("alpha");
-        let modified = sample_stdio_config("alpha", "cat");
-        manager.update_configs(vec![modified]).await;
-        assert!(!manager.tool_cache.read().await.contains_key("alpha"));
-        assert!(manager.current_generation("alpha") > gen_before);
-    }
-
-    #[tokio::test]
-    async fn tool_list_changed_notification_invalidates_manager_tool_cache_and_blocks_stale_commit() {
-        use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
-        use serde_json::json;
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-        let manager = McpClientManager::new();
-        manager
-            .tool_cache
-            .write()
-            .await
-            .insert("live-srv".to_string(), vec![]);
-
-        let (server_io, client_io) = tokio::io::duplex(8192);
-        let (server_read, mut server_write) = tokio::io::split(server_io);
-        let mut reader = BufReader::new(server_read).lines();
-
-        let server_task = tokio::spawn(async move {
-            let line = reader.next_line().await.unwrap().expect("discover line");
-            let req: serde_json::Value = serde_json::from_str(&line).unwrap();
-            let discover_resp = json!({
-                "jsonrpc": "2.0",
-                "id": req["id"],
-                "result": {
-                    "resultType": "complete",
-                    "supportedVersions": ["2026-07-28"],
-                    "capabilities": { "tools": { "listChanged": true } },
-                    "ttlMs": 0,
-                    "cacheScope": "private"
-                }
-            });
-            server_write
-                .write_all(format!("{discover_resp}\n").as_bytes())
-                .await
-                .unwrap();
-            server_write.flush().await.unwrap();
-
-            let notif = json!({
-                "jsonrpc": "2.0",
-                "method": "notifications/tools/list_changed"
-            });
-            server_write
-                .write_all(format!("{notif}\n").as_bytes())
-                .await
-                .unwrap();
-            server_write.flush().await.unwrap();
-        });
-
-        let stale_gen = manager.current_generation("live-srv");
-        let handler = BoxxyClientHandler::new("live-srv", Arc::downgrade(&manager));
-        let client = Arc::new(
-            serve_client_with_lifecycle(
-                handler,
-                client_io,
-                ClientLifecycleMode::Discover {
-                    preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
-                },
-            )
-            .await
-            .expect("discover succeeded"),
-        );
-        manager
-            .active_clients
-            .write()
-            .await
-            .insert("live-srv".to_string(), client.clone());
-
-        server_task.await.unwrap();
-
-        for _ in 0..20 {
-            if !manager.tool_cache.read().await.contains_key("live-srv") {
-                break;
-            }
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
-
-        assert!(
-            !manager.tool_cache.read().await.contains_key("live-srv"),
-            "tool_cache must be invalidated on notifications/tools/list_changed"
-        );
-
-        // A late in-flight `tools/list` started under `stale_gen` must NOT repopulate the cache.
-        manager
-            .commit_tools_if_current("live-srv", &client, stale_gen, vec![])
-            .await;
-        assert!(
-            !manager.tool_cache.read().await.contains_key("live-srv"),
-            "stale generation commit must be rejected"
-        );
-    }
-
-    #[tokio::test]
-    async fn single_flight_ensure_client_coalesces_concurrent_connection_attempts() {
-        use tokio::io::{AsyncReadExt, AsyncWriteExt};
-
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let addr = listener.local_addr().unwrap();
-        let accepted_connections = Arc::new(AtomicUsize::new(0));
-        let accepted_clone = accepted_connections.clone();
-
-        let server_task = tokio::spawn(async move {
-            while let Ok((mut stream, _)) = listener.accept().await {
-                accepted_clone.fetch_add(1, Ordering::SeqCst);
-                tokio::spawn(async move {
-                    let mut buf = [0u8; 1024];
-                    let _ = stream.read(&mut buf).await;
-                    tokio::time::sleep(Duration::from_millis(80)).await;
-                    let resp = "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer realm=\"mcp\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n";
-                    let _ = stream.write_all(resp.as_bytes()).await;
-                });
-            }
-        });
-
-        let manager = McpClientManager::new();
-        manager
-            .update_configs(vec![McpServerConfig {
-                name: "coalesced-srv".to_string(),
-                transport: McpTransport::Http {
-                    url: format!("http://{addr}/mcp"),
-                    headers: HashMap::new(),
-                    streamable: true,
-                },
-                enabled: true,
-                timeout_ms: 3_000,
-                max_retries: 3,
-                backoff: BackoffConfig::default(),
-            }])
-            .await;
-
-        let results = join_all((0..6).map(|_| manager.ensure_client("coalesced-srv"))).await;
-        assert!(results.iter().all(Result::is_err));
-        assert_eq!(
-            accepted_connections.load(Ordering::SeqCst),
-            1,
-            "Concurrent ensure_client calls must coalesce onto a single handshake"
-        );
-
-        server_task.abort();
-    }
-
-    #[tokio::test]
-    async fn permanent_config_error_fails_fast_trips_circuit_breaker_and_resets_on_update() {
-        let manager = McpClientManager::new();
-        let bad_http_cfg = McpServerConfig {
-            name: "bad-scheme-srv".to_string(),
-            transport: McpTransport::Http {
-                url: "tcp://example.com:9000".to_string(),
-                headers: HashMap::new(),
-                streamable: true,
-            },
-            enabled: true,
-            timeout_ms: 5_000,
-            max_retries: 3,
-            backoff: BackoffConfig {
-                initial_ms: 1_000,
-                max_ms: 5_000,
-                multiplier: 2.0,
-            },
-        };
-
-        manager.update_configs(vec![bad_http_cfg.clone()]).await;
-
-        let start = Instant::now();
-        let err1 = manager
-            .ensure_client("bad-scheme-srv")
-            .await
-            .err()
-            .expect("non-http scheme must fail");
-        assert!(
-            start.elapsed() < Duration::from_millis(200),
-            "Permanent config error should skip retry sleeps"
-        );
-        assert!(err1.downcast_ref::<PermanentConfigError>().is_some());
-
-        assert!(
-            manager
-                .failed_servers
-                .read()
-                .await
-                .contains_key("bad-scheme-srv")
-        );
-
-        let err2 = manager
-            .ensure_client("bad-scheme-srv")
-            .await
-            .err()
-            .expect("circuit breaker should short-circuit");
-        assert!(err2.downcast_ref::<CircuitBreakerOpenError>().is_some());
-
-        let updated_cfg = McpServerConfig {
-            name: "bad-scheme-srv".to_string(),
-            transport: McpTransport::Http {
-                url: "https://example.com/mcp".to_string(),
-                headers: HashMap::new(),
-                streamable: true,
-            },
-            ..bad_http_cfg
-        };
-        manager.update_configs(vec![updated_cfg]).await;
-        assert!(
-            !manager
-                .failed_servers
-                .read()
-                .await
-                .contains_key("bad-scheme-srv"),
-            "Updating config must clear the circuit breaker"
-        );
-    }
-
-    #[tokio::test]
-    async fn offline_loopback_http_server_fails_fast_without_retry_backoff() {
-        let closed_port = {
-            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-            listener.local_addr().unwrap().port()
-        };
-
-        let manager = McpClientManager::new();
-        let offline_local_cfg = McpServerConfig {
-            name: "offline-local-srv".to_string(),
-            transport: McpTransport::Http {
-                url: format!("http://127.0.0.1:{closed_port}/mcp"),
-                headers: HashMap::new(),
-                streamable: true,
-            },
-            enabled: true,
-            timeout_ms: 5_000,
-            max_retries: 3,
-            backoff: BackoffConfig {
-                initial_ms: 1_000,
-                max_ms: 5_000,
-                multiplier: 2.0,
-            },
-        };
-
-        manager.update_configs(vec![offline_local_cfg]).await;
-
-        let start = Instant::now();
-        let statuses = manager.get_server_statuses().await;
-        assert_eq!(statuses, vec![("offline-local-srv".to_string(), false)]);
-        assert!(
-            start.elapsed() < Duration::from_millis(500),
-            "Offline loopback server must skip 3,000ms retry sleeps (elapsed: {:?})",
-            start.elapsed()
-        );
-    }
-
-    #[tokio::test]
-    async fn resource_only_server_skips_tools_list_request_and_caches_empty() {
-        use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
-        use serde_json::json;
-        use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-        let manager = McpClientManager::new();
-        let (server_io, client_io) = tokio::io::duplex(8192);
-        let (server_read, mut server_write) = tokio::io::split(server_io);
-        let mut reader = BufReader::new(server_read).lines();
-
-        let server_task = tokio::spawn(async move {
-            let line = reader.next_line().await.unwrap().expect("discover line");
-            let req: serde_json::Value = serde_json::from_str(&line).unwrap();
-            let discover_resp = json!({
-                "jsonrpc": "2.0",
-                "id": req["id"],
-                "result": {
-                    "resultType": "complete",
-                    "supportedVersions": ["2026-07-28"],
-                    "capabilities": { "resources": {} },
-                    "ttlMs": 0,
-                    "cacheScope": "private"
-                }
-            });
-            server_write
-                .write_all(format!("{discover_resp}\n").as_bytes())
-                .await
-                .unwrap();
-            server_write.flush().await.unwrap();
-            // Server deliberately handles NO `tools/list` message; if client sent one, `get_tools` would fail!
-        });
-
-        let handler = BoxxyClientHandler::new("res-only", Arc::downgrade(&manager));
-        let client = Arc::new(
-            serve_client_with_lifecycle(
-                handler,
-                client_io,
-                ClientLifecycleMode::Discover {
-                    preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
-                },
-            )
-            .await
-            .expect("discover succeeded"),
-        );
-        server_task.await.unwrap();
-
-        manager
-            .configs
-            .write()
-            .await
-            .insert("res-only".to_string(), sample_stdio_config("res-only", "echo"));
-        manager
-            .active_clients
-            .write()
-            .await
-            .insert("res-only".to_string(), client);
-
-        let tools = manager.get_tools("res-only").await.expect("empty tools vec");
-        assert_eq!(tools, [] as [rmcp::model::Tool; 0]);
-        assert_eq!(manager.tool_cache.read().await.get("res-only"), Some(&vec![]));
     }
 }

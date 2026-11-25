@@ -5,7 +5,8 @@ use std::time::Duration;
 use rig::completion::ToolAnnotations;
 use rig::message::ToolName;
 use rig::tool::{DynamicTool, ToolExecutionError, ToolOutput};
-use rmcp::model::{CallToolRequestParams, JsonObject, Tool as McpToolDefinition};
+use rmcp::model::{CallToolRequestParams, ErrorCode, JsonObject, Tool as McpToolDefinition};
+use rmcp::service::ServiceError;
 use serde_json::Value;
 
 use super::output::build_tool_outputs;
@@ -133,8 +134,12 @@ async fn execute_mcp_tool_call(
             let (summary, model_output) = match build_tool_outputs(&result) {
                 Ok(pair) => pair,
                 Err(err) => {
-                    notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &err.to_string())
-                        .await;
+                    notify_result(
+                        ctx.observer.as_ref(),
+                        &ctx.normalized_name,
+                        &err.to_string(),
+                    )
+                    .await;
                     return Err(err);
                 }
             };
@@ -148,13 +153,21 @@ async fn execute_mcp_tool_call(
             }
         }
         Ok(Err(e)) => {
+            if (matches!(e, ServiceError::TransportClosed)
+                || client.is_closed()
+                || client.is_transport_closed())
+                && let Some(mgr) = &ctx.manager
+            {
+                mgr.evict_if_same_client(&ctx.server_name, &client).await;
+            }
+
             let err_msg = format!(
                 "MCP tool '{}' failed: {}",
                 ctx.mcp_tool_name,
                 format_service_error(&e)
             );
             notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &err_msg).await;
-            Err(ToolExecutionError::provider(err_msg).with_source(e))
+            Err(classify_service_error(err_msg, e))
         }
         Err(_) => {
             let err_msg = format!(
@@ -167,6 +180,16 @@ async fn execute_mcp_tool_call(
     }
 }
 
+fn classify_service_error(err_msg: String, err: ServiceError) -> ToolExecutionError {
+    match &err {
+        ServiceError::Timeout { .. } => ToolExecutionError::timeout(err_msg).with_source(err),
+        ServiceError::McpError(data) if data.code == ErrorCode::INVALID_PARAMS => {
+            ToolExecutionError::invalid_args(err_msg).with_source(err)
+        }
+        _ => ToolExecutionError::provider(err_msg).with_source(err),
+    }
+}
+
 async fn resolve_live_client(
     ctx: &ToolInvocationContext,
 ) -> Result<Arc<McpClientWrapper>, ToolExecutionError> {
@@ -174,17 +197,17 @@ async fn resolve_live_client(
         return match mgr.ensure_client(&ctx.server_name).await {
             Ok(c) => Ok(c),
             Err(e) => {
-                let err_msg = format!(
-                    "Failed to connect to MCP server '{}': {e}",
-                    ctx.server_name
-                );
+                let err_msg = format!("Failed to connect to MCP server '{}': {e}", ctx.server_name);
                 notify_result(ctx.observer.as_ref(), &ctx.normalized_name, &err_msg).await;
                 Err(ToolExecutionError::provider(err_msg))
             }
         };
     }
 
-    if let Some(c) = ctx.fallback_client.upgrade() {
+    if let Some(c) = ctx.fallback_client.upgrade()
+        && !c.is_closed()
+        && !c.is_transport_closed()
+    {
         return Ok(c);
     }
 
@@ -260,8 +283,7 @@ fn sanitize_segment(raw: &str, fallback_prefix: &str) -> String {
     }
 }
 
-const fn fnv1a_32(bytes: &[u8]) -> u32 {
-    let mut hash: u32 = 0x811c_9dc5;
+const fn fnv1a_32_update(mut hash: u32, bytes: &[u8]) -> u32 {
     let mut i = 0;
     while i < bytes.len() {
         hash ^= bytes[i] as u32;
@@ -269,6 +291,16 @@ const fn fnv1a_32(bytes: &[u8]) -> u32 {
         i += 1;
     }
     hash
+}
+
+const fn fnv1a_32(bytes: &[u8]) -> u32 {
+    fnv1a_32_update(0x811c_9dc5, bytes)
+}
+
+const fn fnv1a_32_pair(left: &[u8], right: &[u8]) -> u32 {
+    let h = fnv1a_32_update(0x811c_9dc5, left);
+    let h = fnv1a_32_update(h, &[0]);
+    fnv1a_32_update(h, right)
 }
 
 /// Strictly normalizes `{server_name}__{tool_name}` to `^[a-zA-Z_][a-zA-Z0-9_-]{0,63}$`
@@ -292,8 +324,11 @@ pub fn sanitize_tool_name(server_name: &str, tool_name: &str) -> String {
     }
 
     if name.len() > MAX_TOOL_NAME_LEN {
-        let hash = fnv1a_32(format!("{server_name}\0{tool_name}").as_bytes());
+        let hash = fnv1a_32_pair(server_name.as_bytes(), tool_name.as_bytes());
         name.truncate(MAX_TOOL_NAME_LEN - 9);
+        while name.ends_with('_') && name.len() > 1 {
+            name.pop();
+        }
         let _ = write!(name, "_{hash:08x}");
     }
 
@@ -356,7 +391,10 @@ mod tests {
             "My_Server__search_code_v2"
         );
         assert_eq!(sanitize_tool_name("123server", "run"), "_123server__run");
-        assert_eq!(sanitize_tool_name("github", "get_issue"), "github__get_issue");
+        assert_eq!(
+            sanitize_tool_name("github", "get_issue"),
+            "github__get_issue"
+        );
         assert_eq!(sanitize_tool_name("", ""), "_mcp_tool");
 
         let jp_a = sanitize_tool_name("サーバーA", "ping");
@@ -375,8 +413,8 @@ mod tests {
             "enterprise_observability_cluster_primary",
             "fetch_distributed_trace_span_attributes_by_service_b",
         );
-        assert_eq!(long_a.len(), MAX_TOOL_NAME_LEN);
-        assert_eq!(long_b.len(), MAX_TOOL_NAME_LEN);
+        assert!(long_a.len() <= MAX_TOOL_NAME_LEN);
+        assert!(long_b.len() <= MAX_TOOL_NAME_LEN);
         assert_ne!(long_a, long_b);
     }
 
@@ -444,7 +482,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn dynamic_mcp_tool_executes_and_notifies_observer_over_2026_07_28_discover() {
+    #[allow(clippy::too_many_lines)]
+    async fn dynamic_mcp_tool_executes_and_accepts_contentless_results_over_2026_07_28_discover() {
         let (server_io, client_io) = tokio::io::duplex(8192);
         let (server_read, mut server_write) = tokio::io::split(server_io);
         let mut reader = BufReader::new(server_read).lines();
@@ -465,22 +504,42 @@ mod tests {
                 .unwrap();
             server_write.flush().await.unwrap();
 
+            // 1st call: standard text content
             let call_line = reader.next_line().await.unwrap().expect("tools/call line");
             let call_req: Value = serde_json::from_str(&call_line).unwrap();
             assert_eq!(call_req["method"], "tools/call");
             assert_eq!(call_req["params"]["name"], "echo_msg");
-            assert_eq!(call_req["params"]["arguments"]["message"], "hello rmcp 3.10");
+            assert_eq!(
+                call_req["params"]["arguments"]["message"],
+                "hello rmcp 3.11"
+            );
 
             let call_resp = json!({
                 "jsonrpc": "2.0",
                 "id": call_req["id"],
                 "result": {
                     "resultType": "complete",
-                    "content": [{ "type": "text", "text": "echo: hello rmcp 3.10" }]
+                    "content": [{ "type": "text", "text": "echo: hello rmcp 3.11" }]
                 }
             });
             server_write
                 .write_all(format!("{call_resp}\n").as_bytes())
+                .await
+                .unwrap();
+            server_write.flush().await.unwrap();
+
+            // 2nd call: contentless `tools/call` result (`rmcp 3.11` PR #1434)
+            let void_line = reader.next_line().await.unwrap().expect("void tools/call");
+            let void_req: Value = serde_json::from_str(&void_line).unwrap();
+            let void_resp = json!({
+                "jsonrpc": "2.0",
+                "id": void_req["id"],
+                "result": {
+                    "resultType": "complete"
+                }
+            });
+            server_write
+                .write_all(format!("{void_resp}\n").as_bytes())
                 .await
                 .unwrap();
             server_write.flush().await.unwrap();
@@ -504,15 +563,13 @@ mod tests {
 
         let schema_obj = json!({
             "type": "object",
-            "properties": { "message": { "type": "string" } },
-            "required": ["message"]
+            "properties": { "message": { "type": "string" } }
         })
         .as_object()
         .unwrap()
         .clone();
 
-        let mcp_tool =
-            McpToolDefinition::new("echo_msg", "Echoes a message", Arc::new(schema_obj));
+        let mcp_tool = McpToolDefinition::new("echo_msg", "Echoes a message", Arc::new(schema_obj));
         let observer = RecordingObserver::new();
 
         let dyn_mcp_tool = DynamicMcpTool {
@@ -527,26 +584,35 @@ mod tests {
         let rig_tool = dyn_mcp_tool.to_dynamic_tool().expect("valid dynamic tool");
         let tool_handle = ToolServer::new().dynamic_tools(vec![rig_tool]).run();
         let mut ctx = ToolContext::default();
-        let result = tool_handle
+        let result1 = tool_handle
             .toolset()
             .execute(
                 "demo__echo_msg",
-                r#"{"message":"hello rmcp 3.10"}"#,
+                r#"{"message":"hello rmcp 3.11"}"#,
                 &mut ctx,
             )
             .await;
+        assert!(!result1.is_error());
 
-        assert!(!result.is_error());
+        let result2 = tool_handle
+            .toolset()
+            .execute("demo__echo_msg", "{}", &mut ctx)
+            .await;
+        assert!(!result2.is_error());
+
         assert_eq!(
             observer.started.lock().await.clone(),
-            vec!["demo__echo_msg".to_string()]
+            vec!["demo__echo_msg".to_string(), "demo__echo_msg".to_string()]
         );
         assert_eq!(
             observer.results.lock().await.clone(),
-            vec![(
-                "demo__echo_msg".to_string(),
-                "echo: hello rmcp 3.10".to_string()
-            )]
+            vec![
+                (
+                    "demo__echo_msg".to_string(),
+                    "echo: hello rmcp 3.11".to_string()
+                ),
+                ("demo__echo_msg".to_string(), String::new()),
+            ]
         );
 
         server_task.await.unwrap();

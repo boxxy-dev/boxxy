@@ -4,13 +4,13 @@ use serde_json::{Map, Value, json};
 ///
 /// Normalizes both root and nested subschemas so strict LLM function-calling APIs
 /// (`OpenAI`, Anthropic, Gemini) do not reject parameterless objects, dialect tags,
-/// or nested Pydantic/Zod `$defs`:
+/// nullable type arrays (`["object", "null"]`), or nested Pydantic/Zod/`schemars` `$defs`:
 /// 1. Strips `$schema` dialect URIs recursively from schema nodes (without touching
 ///    any user tool property literally named `"$schema"` inside `properties`).
 /// 2. Ensures the root schema is an `"object"` with `"properties": {}`.
-/// 3. Ensures nested `"type": "object"` schemas without `properties`,
-///    `additionalProperties`, or `patternProperties` carry `"properties": {}`,
-///    while preserving Draft-07 property-name `dependencies` arrays (`rmcp 3.10`).
+/// 3. Ensures nested `"type": "object"` or `"type": ["object", "null"]` schemas without
+///    `properties`, `additionalProperties`, `patternProperties`, or `unevaluatedProperties`
+///    carry `"properties": {}`, while preserving Draft-07 property-name `dependencies` arrays (`rmcp 3.11`).
 #[must_use]
 pub fn translate_schema(mut schema: Value) -> Value {
     if !schema.is_object() {
@@ -31,8 +31,9 @@ fn normalize_schema_node(node: &mut Value, is_root: bool) {
     // Many LLM function-calling APIs reject the JSON Schema "$schema" dialect key.
     obj.remove("$schema");
 
-    let is_object_schema = match obj.get("type").and_then(Value::as_str) {
-        Some("object") => true,
+    let is_object_schema = match obj.get("type") {
+        Some(Value::String(s)) => s == "object",
+        Some(Value::Array(arr)) => arr.iter().any(|v| v.as_str() == Some("object")),
         None if is_root => {
             obj.insert("type".to_string(), json!("object"));
             true
@@ -44,7 +45,8 @@ fn normalize_schema_node(node: &mut Value, is_root: bool) {
         let has_shape_keywords = obj.contains_key("properties")
             || (!is_root
                 && (obj.contains_key("additionalProperties")
-                    || obj.contains_key("patternProperties")));
+                    || obj.contains_key("patternProperties")
+                    || obj.contains_key("unevaluatedProperties")));
         if !has_shape_keywords {
             obj.insert("properties".to_string(), json!({}));
         }
@@ -75,6 +77,7 @@ fn normalize_schema_node(node: &mut Value, is_root: bool) {
     // Keywords whose value is a single subschema (or boolean).
     for single_key in [
         "additionalProperties",
+        "unevaluatedProperties",
         "not",
         "if",
         "then",
@@ -156,7 +159,7 @@ mod tests {
     }
 
     #[test]
-    fn normalizes_nested_defs_preserves_dict_maps_and_dependency_arrays() {
+    fn normalizes_nested_defs_nullable_objects_dict_maps_and_dependency_arrays() {
         let input = json!({
             "$schema": "https://json-schema.org/draft/2020-12/schema",
             "type": "object",
@@ -166,9 +169,19 @@ mod tests {
                     "$schema": "http://json-schema.org/draft-07/schema#",
                     "type": "object"
                 },
+                "nullable_empty": {
+                    "type": ["object", "null"]
+                },
                 "freeform_headers": {
                     "type": "object",
                     "additionalProperties": { "type": "string" }
+                },
+                "unevaluated_map": {
+                    "type": "object",
+                    "unevaluatedProperties": {
+                        "$schema": "https://json-schema.org/draft/2020-12/schema",
+                        "type": "string"
+                    }
                 }
             },
             "$defs": {
@@ -189,11 +202,36 @@ mod tests {
         let translated = translate_schema(input);
         // A user parameter literally named "$schema" inside `properties` must be preserved!
         assert_eq!(translated["properties"]["$schema"]["type"], "string");
-        // Nested `$schema` dialect tags are stripped and bare objects receive `"properties": {}`.
-        assert!(translated["properties"]["empty_nested"].get("$schema").is_none());
-        assert_eq!(translated["properties"]["empty_nested"]["properties"], json!({}));
-        // Dictionary maps with `additionalProperties` keep their open-map semantics.
-        assert!(translated["properties"]["freeform_headers"].get("properties").is_none());
+        // Nested `$schema` dialect tags are stripped and bare objects (including `["object", "null"]`) receive `"properties": {}`.
+        assert!(
+            translated["properties"]["empty_nested"]
+                .get("$schema")
+                .is_none()
+        );
+        assert_eq!(
+            translated["properties"]["empty_nested"]["properties"],
+            json!({})
+        );
+        assert_eq!(
+            translated["properties"]["nullable_empty"]["properties"],
+            json!({})
+        );
+        // Dictionary maps with `additionalProperties` / `unevaluatedProperties` keep their open-map semantics.
+        assert!(
+            translated["properties"]["freeform_headers"]
+                .get("properties")
+                .is_none()
+        );
+        assert!(
+            translated["properties"]["unevaluated_map"]
+                .get("properties")
+                .is_none()
+        );
+        assert!(
+            translated["properties"]["unevaluated_map"]["unevaluatedProperties"]
+                .get("$schema")
+                .is_none()
+        );
         // `$defs` and Draft-07 `dependencies` (both array and subschema forms) are handled cleanly.
         assert!(translated["$defs"]["Filter"].get("$schema").is_none());
         assert_eq!(translated["$defs"]["Filter"]["properties"], json!({}));
@@ -201,6 +239,9 @@ mod tests {
             translated["dependencies"]["credit_card"],
             json!(["billing_address"])
         );
-        assert_eq!(translated["dependencies"]["advanced"]["properties"], json!({}));
+        assert_eq!(
+            translated["dependencies"]["advanced"]["properties"],
+            json!({})
+        );
     }
 }
