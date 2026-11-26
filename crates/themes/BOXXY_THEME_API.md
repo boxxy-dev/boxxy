@@ -34,7 +34,7 @@ Boxxy ships with two official built-in themes in `builtin_app_themes()` (`crates
 | :--- | :--- | :--- | :--- |
 | `window_bg` | `#1d1d20` (Carbon Dark) | `#ecfafb` (Warm Mint Paper) | Primary window, Preferences content pane, and Claw overlay drawer canvas background. |
 | `window_fg` | `#f2f4f2` | `#111418` | Primary text and icon foreground on `window_bg`. |
-| `sidebar_bg` | `#2e2e32` (Elevated Slate) | `#ffffff` (Crisp White) | Left sidebar (`AI Chat`, `Claw`, `Bookmarks`, `Colors`) and Preferences navigation sidebar background. |
+| `sidebar_bg` | `#2e2e32` (Elevated Slate) | `#ffffff` (Crisp White) | Left sidebar (`Claw`, `Bookmarks`, `Colors`) and Preferences navigation sidebar background. |
 | `sidebar_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `sidebar_bg`. |
 | `card_bg` | `#26262a` (Card Surface) | `#ffffff` (Crisp White) | Tactile buttons, unselected tabs, preference `boxed-list` cards, search/text entries, and linked button strips inside menus. |
 | `card_fg` | `#f2f4f2` | `#111418` | Text and icon foreground on `card_bg`. |
@@ -116,7 +116,7 @@ Boxxy intentionally distinguishes between **floating tactile controls** (which c
 
 | Component / Selector | Has `@boxxy_shadow`? | Shadow Offset | Rationale |
 | :--- | :--- | :--- | :--- |
-| **Sidebar & Dialog Switcher Buttons** (`viewswitcher > button`, `stackswitcher > button`, `:checked`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Top-level mode switchers (`AI Chat`, `Claw`, `Bookmarks`, `Colors` in the sidebar and `AI Chat` / `Boxxy Claw` / `Memories and Dreams` in Models Selection) sit in spacious headers with inter-button gaps (`2px` / `6px`) and act as tactile physical toggles. |
+| **Sidebar & Dialog Switcher Buttons** (`viewswitcher > button`, `stackswitcher > button`, `:checked`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Top-level mode switchers (`Claw`, `Bookmarks`, `Colors` in the sidebar and `Characters` / `Dreams` in Models Selection) sit in spacious headers with inter-button gaps (`2px` / `6px`) and act as tactile physical toggles. |
 | **Hero / Advertising CTA Buttons** (`button.pill:not(.flat)`) | **Yes** | `3px 4px 0px @boxxy_shadow` (`4px 5px 0px` on `:hover`) | Primary dialog footer actions (`Done`, `Save`, `Apply`, `Read What's New`, `Cancel`/`Close`) use boxy-rounded `10px` corners, `32px` min-height, and `7px 22px` padding with a slight hover lift (`translate(-1px, -1px)`). |
 | **Sidebar & Command Palette Rows** (`.navigation-sidebar > row:selected`, `:hover`, `.menu-open`) | **Yes** | `2px 3px 0px @boxxy_shadow` | Lifts the active or hovered conversation, command palette item, bookmark, or preferences category above the flat list. Depresses to `1px 1px 0px` on `:active`. |
 | **Terminal Tabs** (`tabbar tab`, `tabbar tab:selected`) | **No** (`box-shadow: none`) | `none` | Tabs live inside `AdwTabBar`'s compact `28px` strip. Keeping `box-shadow: none` (while retaining the `2px solid @boxxy_ink` outline and `@accent_bg_color` active fill) prevents bottom shadow clipping inside `AdwTabBox` and keeps the tab bar flush. |

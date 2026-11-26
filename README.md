@@ -2,21 +2,26 @@
 
 **A self-improving Linux terminal powered by AI characters.**
 
-![Boxxy](https://i.imgur.com/7NtOXBp.png)
+![Boxxy](https://i.imgur.com/Z0hVqaZ.png)
 
 Boxxy is a full terminal emulator with an agentic AI layer — **BoxxyClaw** — built directly into it. Unlike chat-window add-ons, BoxxyClaw has eyes on your shell, reads your terminal buffer, remembers your preferences, and can autonomously fix broken dependencies, manage system configs, and run your scripts. Just press `Ctrl+/` and you're in.
 
 ---
 
 ## Install
-Boxxy is currently in Preview. 
 
-**Native Nightly** (Requires GTK 4.24, libAdwaita 1.10)
+<details open>
+<summary><b>Native</b> · <sub>Requires GTK 4.24+</sub></summary>
+
 ```bash
 curl -sSf https://raw.githubusercontent.com/boxxy-dev/boxxy/main/scripts/install.sh | sh
 ```
 
-**Flatpak Nightly**
+</details>
+
+<details>
+<summary><b>Flatpak</b> · <sub>Sandboxed desktop package</sub></summary>
+
 ```bash
 curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
   flatpak remote-add --user --if-not-exists --gpg-import=boxxy.gpg \
@@ -24,38 +29,34 @@ curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
   flatpak install --user boxxy dev.boxxy.BoxxyTerminal
 ```
 
+</details>
+
+<details>
+<summary><b>NixOS</b> · <sub>Nix Flake</sub></summary>
+
+```bash
+nix profile install github:boxxy-dev/boxxy
+```
+
+Try without installing: `nix run github:boxxy-dev/boxxy` · Flake input: `github:boxxy-dev/boxxy`
+
+</details>
+
+<sub>Desktop panel companions: <a href="https://github.com/boxxy-dev/gnome-shell-boxxy-companion">GNOME Shell Extension ↗</a> · <a href="https://github.com/boxxy-dev/cosmic-boxxy-companion">COSMIC Desktop Applet ↗</a></sub>
+
 ---
 
 ## Architecture
 
+Boxxy splits a GPU-rendered GTK4/Libadwaita frontend from a host-privileged D-Bus daemon so running shells, character sessions, and reminders survive window closes and Flatpak sandboxing.
+
 | Crate | Role |
 | :--- | :--- |
-| `boxxy-app` | GTK4/Adwaita UI |
-| `boxxy-agent` | Host-level daemon — PTY management, shell tools, character claims, D-Bus IPC |
-| `boxxy-vte` | Headless terminal engine written in pure Rust |
-| `boxxy-claw` | Agentic intelligence layer — characters, memory, skills, toolbox |
-
----
-
-## Supported Providers
-
-| Provider | Support |
-| :--- | :--- |
-| **Google Gemini** | Full Gemini model catalog (with configurable thinking levels & native Google Search) |
-| **Anthropic** | Full Claude model catalog (with configurable thinking levels & native web search) |
-| **OpenAI** | Full OpenAI model catalog (with configurable reasoning effort & native web search) |
-| **DeepSeek** | Full DeepSeek model catalog |
-| **Moonshot (Kimi)** | Full Kimi model catalog (`kimi-k3`, `kimi-k2.7-code`, etc., with configurable thinking levels) |
-| **xAI** | Full Grok model catalog (`grok-4.7`, `grok-4.6`, etc., with configurable reasoning effort) |
-| **Z.ai** | Full GLM model catalog (`glm-5.3`, `glm-5.3-flash`, etc., with configurable thinking levels) |
-| **Mistral** | Full Mistral & Codestral model catalog (`mistral-large-latest`, `codestral-latest`, etc.) |
-| **MiniMax** | Full MiniMax model catalog (`MiniMax-M3`, `MiniMax-M2.7`, etc.) |
-| **Groq** | Ultra-fast Groq model catalog (`gpt-oss-120b`, `qwen3.8-27b`, `llama-3.3-70b`, etc.) |
-| **Ollama** | Any locally installed model (`ollama run ...`) |
-| **OpenRouter** | Any OpenRouter model ID |
-| **OpenAI-Compatible Endpoints** | Any custom `/v1/chat/completions` or `/v1/responses` endpoint (OpenCode Go, OpenCode Zen, LiteLLM, vLLM, llama.cpp, LM Studio, etc.) with live `/models` discovery, configurable context size, and thinking modes |
-
-> Need support for another provider? Please [open an issue](https://github.com/boxxy-dev/boxxy/issues) to request it!
+| `boxxy-app` / `boxxy-window` | GTK4 & Libadwaita UI, tabs, splits, frosted glass, and custom theme engine |
+| `boxxy-vte` | Lock-free pure-Rust terminal engine with GSK rendering, Kittygraphics, and OSC 7/8/133 |
+| `boxxy-agent` | Host D-Bus daemon managing persistent PTY ring buffers, character claims, and Dream Cycles |
+| `boxxy-claw` | Per-pane actor engine for characters, FTS5 memory recall, skills, swarm tools, and approvals |
+| `boxxy-ai-core` / `boxxy-mcp` | Unified multi-provider LLM & OAuth layer (`rig`) plus lazy-boot Stdio/HTTP MCP client |
 
 ---
 
@@ -65,9 +66,11 @@ Full docs at **[boxxy.dev](https://boxxy.dev)**
 
 - [Getting Started](https://boxxy.dev/getting-started)
 - [How It Works](https://boxxy.dev/how-it-works)
+- [Supported Providers](https://boxxy.dev/providers)
 - [Characters](https://boxxy.dev/characters)
 - [Skills](https://boxxy.dev/skills)
 - [MCP Support](https://boxxy.dev/mcp)
+- [Boxxy Theme API](https://boxxy.dev/theme-api)
 - [Development](https://boxxy.dev/development)
 
 ---
