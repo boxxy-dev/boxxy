@@ -374,7 +374,6 @@ impl TerminalPaneComponent {
                         "TERM_PROGRAM_VERSION".to_string(),
                         env!("CARGO_PKG_VERSION").to_string(),
                     ));
-                    env.push(("VTE_VERSION".to_string(), "7600".to_string()));
 
                     let (cols, rows) = {
                         let inner = inner_rc.borrow();

@@ -30,7 +30,9 @@ fn scrub_inherited_boxxy_env(env: &mut Vec<(String, String)>) {
     boxxy_sys_utils::env::scrub_child_pty_env(env);
 }
 
-const LEAKED_MULTIPLEXER_EXACT: &[&str] = &["STY", "WINDOW", "WT_SESSION"];
+// Includes VTE_VERSION so launching Boxxy from a VTE-based terminal doesn't
+// trigger /etc/profile.d/vte*.sh to inject conflicting PS0/PS1/OSC 133 hooks.
+const LEAKED_MULTIPLEXER_EXACT: &[&str] = &["STY", "WINDOW", "WT_SESSION", "VTE_VERSION"];
 
 fn is_leaked_multiplexer_var(key: &str) -> bool {
     is_leaked_multiplexer_prefix(key) || LEAKED_MULTIPLEXER_EXACT.contains(&key)
@@ -809,6 +811,10 @@ mod tests {
 
     #[test]
     fn scrub_inherited_boxxy_env_clears_parent_markers_and_keeps_explicit_opt_out() {
+        assert!(is_leaked_multiplexer_var("VTE_VERSION"));
+        assert!(is_leaked_multiplexer_var("TMUX"));
+        assert!(!is_leaked_multiplexer_var("TERM_PROGRAM"));
+
         let mut env = vec![
             ("PATH".to_string(), "/usr/bin".to_string()),
             ("BOXXY_DEV".to_string(), "1".to_string()),

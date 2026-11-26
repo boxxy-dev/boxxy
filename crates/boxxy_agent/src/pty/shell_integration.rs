@@ -558,6 +558,7 @@ mod tests {
         use nix::fcntl::OFlag;
         use nix::pty::{grantpt, posix_openpt, ptsname_r, unlockpt};
         use nix::sys::stat::Mode;
+        use std::os::unix::process::CommandExt;
         use std::process::{Command, Stdio};
         use std::time::{Duration, Instant};
 
@@ -589,20 +590,33 @@ mod tests {
         )
         .expect("open slave pty");
 
-        let mut child = Command::new("/bin/bash")
-            .arg("--noprofile")
+        let mut cmd = Command::new("/bin/bash");
+        cmd.arg("--noprofile")
             .arg("--rcfile")
             .arg(&rc)
             .arg("-i")
+            .env_clear()
             .env("HOME", &home)
             .env("PATH", "/usr/bin:/bin")
             .env("TERM", "dumb")
             .env("PS0", PREEXISTING_PS0)
             .stdin(Stdio::from(slave.try_clone().expect("clone slave fd")))
             .stdout(Stdio::from(slave.try_clone().expect("clone slave fd")))
-            .stderr(Stdio::from(slave))
-            .spawn()
-            .expect("spawn interactive bash");
+            .stderr(Stdio::from(slave));
+
+        // Attach the slave PTY as the child's controlling terminal so Bash < 5.3's
+        // `$(__boxxy_preexec >/dev/tty)` fallback writes into this PTY even in headless CI.
+        unsafe {
+            cmd.pre_exec(|| {
+                nix::unistd::setsid().map_err(std::io::Error::from)?;
+                if libc::ioctl(libc::STDIN_FILENO, libc::TIOCSCTTY, 0) != 0 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+
+        let mut child = cmd.spawn().expect("spawn interactive bash");
 
         let started = Instant::now();
         let mut out = Vec::new();
@@ -612,7 +626,8 @@ mod tests {
             // Send the probe command once the shell has started emitting prompt bytes, so the
             // PTY input queue is never flushed by bash's own startup before it is read.
             if !command_sent && (!out.is_empty() || started.elapsed() > Duration::from_millis(1500)) {
-                nix::unistd::write(&master, format!("echo {OUTPUT_MARKER}\n").as_bytes())
+                // Split the marker in printf so the PTY's input echo cannot self-match OUTPUT_MARKER.
+                nix::unistd::write(&master, b"printf 'BOX_BASH_%s\\n' 'PS0_PROBE'\n")
                     .expect("write probe command");
                 command_sent = true;
             }
