@@ -1,4 +1,5 @@
 use crate::parser::blocks::ContentBlock;
+use crate::registry::LinkSafetyPolicy;
 use crate::renderer::{BlockRenderer, RenderContext};
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -16,30 +17,77 @@ fn heading_style(level: u8) -> (&'static str, &'static str) {
     }
 }
 
+/// Returns `true` if `uri` is permitted to launch under `policy`.
+#[must_use]
+pub fn is_allowed_link_uri(uri: &str, policy: LinkSafetyPolicy) -> bool {
+    let trimmed = uri.trim();
+    if trimmed.is_empty() || trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+        return false;
+    }
+    match policy {
+        LinkSafetyPolicy::RemoteHttpsOnly => {
+            trimmed.len() > "https://".len() && trimmed.starts_with("https://")
+        }
+        LinkSafetyPolicy::LocalWorkspace => {
+            trimmed.starts_with("http://")
+                || trimmed.starts_with("https://")
+                || trimmed.starts_with("mailto:")
+                || trimmed.starts_with("file://")
+                || trimmed.starts_with('/')
+        }
+    }
+}
+
 /// Attaches a portal-safe link handler to a `gtk::Label` with `use_markup = true`
 /// so `<a href="...">` links open via `UriLauncher` (HTTP/HTTPS) or `FileLauncher` (local files).
 pub fn connect_label_links(label: &gtk::Label) {
-    label.connect_activate_link(|lbl, uri| {
+    connect_label_links_with_policy(label, LinkSafetyPolicy::LocalWorkspace);
+}
+
+/// Attaches a policy-enforced link handler to a `gtk::Label`.
+///
+/// In [`LinkSafetyPolicy::RemoteHttpsOnly`], only `https://` URIs are opened via
+/// `gtk::UriLauncher`; `file://`, `/abs/path`, `http://`, `mailto:`, and custom schemes
+/// are swallowed (`Propagation::Stop`) without calling `GtkFileLauncher` or GTK's default handler.
+pub fn connect_label_links_with_policy(label: &gtk::Label, policy: LinkSafetyPolicy) {
+    label.connect_activate_link(move |lbl, uri| {
+        let trimmed = uri.trim();
         let parent_win = lbl.root().and_then(|r| r.downcast::<gtk::Window>().ok());
-        if uri.starts_with("http://") || uri.starts_with("https://") || uri.starts_with("mailto:") {
-            let launcher = gtk::UriLauncher::new(uri);
-            glib::spawn_future_local(async move {
-                let _ = launcher.launch_future(parent_win.as_ref()).await;
-            });
-            glib::Propagation::Stop
-        } else if uri.starts_with("file://") || uri.starts_with('/') {
-            let file = if uri.starts_with("file://") {
-                gio::File::for_uri(uri)
-            } else {
-                gio::File::for_path(uri)
-            };
-            let launcher = gtk::FileLauncher::new(Some(&file));
-            glib::spawn_future_local(async move {
-                let _ = launcher.launch_future(parent_win.as_ref()).await;
-            });
-            glib::Propagation::Stop
-        } else {
-            glib::Propagation::Proceed
+        match policy {
+            LinkSafetyPolicy::RemoteHttpsOnly => {
+                if is_allowed_link_uri(trimmed, LinkSafetyPolicy::RemoteHttpsOnly) {
+                    let launcher = gtk::UriLauncher::new(trimmed);
+                    glib::spawn_future_local(async move {
+                        let _ = launcher.launch_future(parent_win.as_ref()).await;
+                    });
+                }
+                glib::Propagation::Stop
+            }
+            LinkSafetyPolicy::LocalWorkspace => {
+                if trimmed.starts_with("http://")
+                    || trimmed.starts_with("https://")
+                    || trimmed.starts_with("mailto:")
+                {
+                    let launcher = gtk::UriLauncher::new(trimmed);
+                    glib::spawn_future_local(async move {
+                        let _ = launcher.launch_future(parent_win.as_ref()).await;
+                    });
+                    glib::Propagation::Stop
+                } else if trimmed.starts_with("file://") || trimmed.starts_with('/') {
+                    let file = if trimmed.starts_with("file://") {
+                        gio::File::for_uri(trimmed)
+                    } else {
+                        gio::File::for_path(trimmed)
+                    };
+                    let launcher = gtk::FileLauncher::new(Some(&file));
+                    glib::spawn_future_local(async move {
+                        let _ = launcher.launch_future(parent_win.as_ref()).await;
+                    });
+                    glib::Propagation::Stop
+                } else {
+                    glib::Propagation::Proceed
+                }
+            }
         }
     });
 }
@@ -85,7 +133,7 @@ impl BlockRenderer for TextRenderer {
                 label.set_selectable(true);
                 label.set_markup(markup);
                 label.set_margin_bottom(8);
-                connect_label_links(&label);
+                connect_label_links_with_policy(&label, registry.link_safety());
                 label.upcast()
             }
             ContentBlock::Heading { level, markup } => {
@@ -105,7 +153,7 @@ impl BlockRenderer for TextRenderer {
                 label.set_markup(&full_markup);
                 label.set_margin_top(12);
                 label.set_margin_bottom(8);
-                connect_label_links(&label);
+                connect_label_links_with_policy(&label, registry.link_safety());
 
                 label.upcast()
             }
@@ -276,5 +324,51 @@ fn populate_blockquote_children(
             }
             inner_vbox.append(&widget);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn remote_https_only_blocks_local_cleartext_and_custom_schemes() {
+        assert!(is_allowed_link_uri(
+            "https://boxxy.dev/news/#post",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_link_uri(
+            "https://",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_link_uri(
+            "http://boxxy.dev/news/",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_link_uri(
+            "file:///etc/passwd",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_link_uri(
+            "/etc/passwd",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_link_uri(
+            "mailto:test@example.com",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_link_uri(
+            "javascript:alert(1)",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+
+        assert!(is_allowed_link_uri(
+            "/tmp/synthetic.txt",
+            LinkSafetyPolicy::LocalWorkspace
+        ));
+        assert!(is_allowed_link_uri(
+            "http://example.com",
+            LinkSafetyPolicy::LocalWorkspace
+        ));
     }
 }

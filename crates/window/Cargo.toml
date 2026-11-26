@@ -23,6 +23,9 @@ boxxy-core-widgets.workspace = true
 boxxy-bookmarks = { path = "../boxxy_bookmarks" }
 boxxy-model-selection = { path = "../model_selection" }
 boxxy-command-palette = { path = "../command_palette" }
+boxxy-broadcast.workspace = true
+boxxy-viewer.workspace = true
+parking_lot.workspace = true
 chrono.workspace = true
 anyhow.workspace = true
 async-channel.workspace = true

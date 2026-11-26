@@ -439,6 +439,8 @@ pub struct Settings {
     #[serde(default)]
     pub currency: Currency,
     pub claw_msgbar_shortcut: String,
+    #[serde(default = "default_enable_broadcasts")]
+    pub enable_broadcasts: bool,
     pub enable_telemetry: bool,
     pub install_id: Option<String>,
     pub mcp_servers: Vec<boxxy_mcp::config::McpServerConfig>,
@@ -515,6 +517,7 @@ impl Default for Settings {
             overlay_font_scale: default_overlay_font_scale(),
             currency: Currency::Usd,
             claw_msgbar_shortcut: "<Ctrl>slash".to_string(),
+            enable_broadcasts: default_enable_broadcasts(),
             enable_telemetry: true, // ON by default during Preview
             install_id: None,
             mcp_servers: vec![],
@@ -546,6 +549,10 @@ const fn default_overlay_font_scale() -> u32 {
 
 const fn default_max_roundtable_turns() -> u32 {
     20
+}
+
+const fn default_enable_broadcasts() -> bool {
+    true
 }
 
 fn atomic_write_file(path: &Path, content: &str) -> std::io::Result<()> {

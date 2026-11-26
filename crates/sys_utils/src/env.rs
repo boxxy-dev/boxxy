@@ -152,6 +152,16 @@ pub const ENV_SPECS: &[EnvVarSpec] = &[
         propagate_raw_to_daemon: true,
         scrub_from_child_pty: true,
     },
+    EnvVarSpec {
+        name: "BOXXY_BROADCAST_ENDPOINT",
+        category: EnvCategory::Diagnostics,
+        cli_flag: None,
+        value_hint: "<URL>",
+        summary: "Override the Boxxy News RPC endpoint URL for local testing.",
+        secret: false,
+        propagate_raw_to_daemon: false,
+        scrub_from_child_pty: true,
+    },
     // --- Built-in Provider API Keys ---
     EnvVarSpec {
         name: "GEMINI_API_KEY",
@@ -445,6 +455,12 @@ pub fn telemetry_endpoint() -> Option<String> {
     non_empty_trimmed_env("BOXXY_TELEMETRY_ENDPOINT")
 }
 
+/// Returns the custom `BOXXY_BROADCAST_ENDPOINT` URL if set and non-empty.
+#[must_use]
+pub fn broadcast_endpoint() -> Option<String> {
+    non_empty_trimmed_env("BOXXY_BROADCAST_ENDPOINT")
+}
+
 /// Masks a secret value for safe CLI display (`"sk-abc...xyz"` -> `"sk-a•••••••• (32 chars)"`).
 ///
 /// Only reveals a 4-character prefix when the secret has at least 12 characters
@@ -650,6 +666,14 @@ mod tests {
             "BOXXY_TELEMETRY_ENDPOINT",
             "https://collector.example.com/v1/metrics",
         );
+        guard.set_extra_var(
+            "BOXXY_BROADCAST_ENDPOINT",
+            "https://news.example.com/rest/v1/rpc/get_broadcast_feed",
+        );
+        assert_eq!(
+            broadcast_endpoint().as_deref(),
+            Some("https://news.example.com/rest/v1/rpc/get_broadcast_feed")
+        );
 
         let spawned = daemon_spawn_env(&cfg);
         assert!(spawned.contains(&("BOXXY_DEBUG_CONTEXT", "1".to_string())));
@@ -659,12 +683,17 @@ mod tests {
             "BOXXY_TELEMETRY_ENDPOINT",
             "https://collector.example.com/v1/metrics".to_string()
         )));
+        assert!(!spawned.iter().any(|(k, _)| *k == "BOXXY_BROADCAST_ENDPOINT"));
         assert!(spawned.contains(&("BOXXY_CONFIG_DIR", cfg.to_string_lossy().into_owned())));
 
         let mut pty_env = vec![
             ("PATH".to_string(), "/usr/bin".to_string()),
             ("BOXXY_DEV".to_string(), "1".to_string()),
             ("BOXXY_DEBUG_CONTEXT".to_string(), "1".to_string()),
+            (
+                "BOXXY_BROADCAST_ENDPOINT".to_string(),
+                "https://news.example.com/rpc".to_string(),
+            ),
             ("BOXXY_ORIG_ZDOTDIR".to_string(), "/tmp/zdot".to_string()),
             ("BOXXY_SHELL_INTEGRATION".to_string(), "false".to_string()),
             ("TAVILY_API_KEY".to_string(), "tvly-synthetic".to_string()),

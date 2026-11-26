@@ -1,9 +1,9 @@
 # boxxy-db
 
 ## Role
-Provides the persistent SQLite storage layer for Boxxy-Terminal, backing Long-Term Memory (RAG), episodic interaction history, conversation/session resumption, skill FTS5 indexing, input history (`msgbar_history`), and the durable OpenTelemetry event journal (`telemetry_journal`).
+Provides the persistent SQLite storage layer for Boxxy-Terminal, backing Long-Term Memory (RAG), episodic interaction history, conversation/session resumption, skill FTS5 indexing, input history (`msgbar_history`), the durable OpenTelemetry event journal (`telemetry_journal`), and the **Boxxy News** offline cache + permanent disposition receipts (`broadcast_articles`, `broadcast_receipts`, `broadcast_meta`).
 
-All SQLite queries across the workspace live inside `boxxy-db` (`Store`) — higher-level crates (`boxxy-claw`, `boxxy-agent`, `boxxy-claw-ui`, `boxxy-claw-widget`, `boxxy-telemetry`) interact strictly through typed `Db` and `Store` APIs rather than raw `sqlx` queries.
+All SQLite queries across the workspace live inside `boxxy-db` (`Store`) — higher-level crates (`boxxy-claw`, `boxxy-agent`, `boxxy-claw-ui`, `boxxy-claw-widget`, `boxxy-telemetry`, `boxxy-broadcast`) interact strictly through typed `Db` and `Store` APIs rather than raw `sqlx` queries.
 
 ## Architecture & Module Layout
 
@@ -12,13 +12,15 @@ crates/db/
 ├── migrations/
 │   ├── schema_latest.sql                                # Canonical schema for fresh installs & Db::new_in_memory()
 │   ├── 20261115000001_harden_schema_fts_and_indexes.sql # Non-destructive v15 -> journaled schema upgrade
-│   └── 20261115000002_upgrade_telemetry_journal.sql     # Normalized coalescing telemetry_journal with ms timestamps & event_id
+│   ├── 20261115000002_upgrade_telemetry_journal.sql     # Normalized coalescing telemetry_journal with ms timestamps & event_id
+│   └── 20261126000001_add_broadcast_tables.sql          # Boxxy News article cache, receipts, and sync metadata
 └── src/
     ├── lib.rs          # Db pool lifecycle, 0700/0600 POSIX permissions, WAL/MEMORY pragmas, Db::open_at(), db.store()
     ├── migrations.rs   # OpenCode-style `migration` journal runner, pre-upgrade `.bak` snapshot, zero-drift tests
-    ├── models.rs       # Session, SessionUpsert, Interaction, Memory, SkillRecord, MsgBarHistory, TelemetryJournal*, HygieneStats
+    ├── models.rs       # Session, SessionUpsert, Interaction, Memory, SkillRecord, MsgBarHistory, TelemetryJournal*, Broadcast*, HygieneStats
     └── store/
         ├── mod.rs          # Store<'a> handle & SQLITE_BIND_CHUNK_SIZE batch ceiling
+        ├── broadcasts.rs   # Transactional Boxxy News reconciliation, 4-row cache cap, permanent per-UUID receipts
         ├── sessions.rs     # Sessions, transactional character migration, pending tasks, claw_events
         ├── memories.rs     # Long-term facts, candidate reinforcement, promotion, conflict demotion, FTS5, hygiene
         ├── interactions.rs # Episodic summaries, dreaming state transitions, embeddings, FTS5 search

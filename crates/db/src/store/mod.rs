@@ -1,11 +1,14 @@
 //! Domain-organized SQLite data access methods over a [`sqlx::SqlitePool`].
 
+mod broadcasts;
 mod interactions;
 mod memories;
 mod msgbar;
 mod sessions;
 mod skills;
 mod telemetry;
+
+pub use broadcasts::{MAX_CACHED_BROADCAST_ARTICLES, NEW_NOTIFICATION_MAX_AGE_DAYS};
 
 use sqlx::{QueryBuilder, Sqlite, SqlitePool};
 

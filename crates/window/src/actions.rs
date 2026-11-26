@@ -89,6 +89,16 @@ pub fn setup_actions(
     add_action!("shortcuts", AppInput::OpenShortcuts);
     add_action!("welcome", AppInput::OpenWelcome);
     add_action!("whats-new", AppInput::OpenWhatsNew);
+    add_action!("boxxy-news", AppInput::OpenBroadcasts);
+    let open_news_article =
+        gio::SimpleAction::new("open-news-article", Some(gtk4::glib::VariantTy::STRING));
+    let s_news_article = sender.clone();
+    open_news_article.connect_activate(move |_, param| {
+        if let Some(id) = param.and_then(|p| p.get::<String>()) {
+            let _ = s_news_article.send_blocking(AppInput::OpenBroadcastArticle(id));
+        }
+    });
+    action_group.add_action(&open_news_article);
     add_action!("about", AppInput::OpenAbout);
     add_action!("open-in-files", AppInput::OpenInFiles);
     add_action!("zoom-in", AppInput::ZoomIn);

@@ -95,6 +95,37 @@ pub(crate) fn populate_about_page(
     group.add(&issues_row);
     page.add(&group);
 
+    // Boxxy News Group
+    let news_group = adw::PreferencesGroup::builder()
+        .title("Boxxy News")
+        .description("Occasional release highlights, feature announcements, and community updates from the Boxxy project.")
+        .build();
+
+    let news_switch = adw::SwitchRow::builder()
+        .title("News Notifications")
+        .subtitle("Show an in-app notification when new announcements are published.")
+        .active(Settings::load().enable_broadcasts)
+        .build();
+
+    {
+        let is_syncing = is_syncing.clone();
+        news_switch.connect_active_notify(move |row| {
+            if is_syncing.get() {
+                return;
+            }
+            let active = row.is_active();
+            Settings::update(|s| {
+                s.enable_broadcasts = active;
+            });
+        });
+    }
+
+    let read_news_row = build_link_row("Read News on Web", "https://boxxy.dev/news/");
+
+    news_group.add(&news_switch);
+    news_group.add(&read_news_row);
+    page.add(&news_group);
+
     // Telemetry Group
     let telemetry_group = adw::PreferencesGroup::builder()
         .title("Telemetry")
@@ -134,6 +165,13 @@ pub(crate) fn populate_about_page(
         SearchRow::new(&releases_row, "changelog whats new"),
         SearchRow::new(&issues_row, "bug github"),
     ];
+    let news_rows = vec![
+        SearchRow::new(
+            &news_switch,
+            "news broadcasts announcements updates notifications",
+        ),
+        SearchRow::new(&read_news_row, "news broadcasts announcements updates"),
+    ];
     let telem_rows = vec![
         SearchRow::new(&telemetry_switch, "telemetry privacy metrics"),
         SearchRow::new(&view_stats_row, "telemetry metrics"),
@@ -141,6 +179,9 @@ pub(crate) fn populate_about_page(
 
     let sync = Box::new(move |s: &Settings| {
         is_syncing.set(true);
+        if news_switch.is_active() != s.enable_broadcasts {
+            news_switch.set_active(s.enable_broadcasts);
+        }
         if telemetry_switch.is_active() != s.enable_telemetry {
             telemetry_switch.set_active(s.enable_telemetry);
         }
@@ -152,14 +193,19 @@ pub(crate) fn populate_about_page(
         for r in &meta_rows {
             meta_vis |= r.apply(query);
         }
+        let mut news_vis = false;
+        for r in &news_rows {
+            news_vis |= r.apply(query);
+        }
         let mut telem_vis = false;
         for r in &telem_rows {
             telem_vis |= r.apply(query);
         }
         header_group.set_visible(query.is_empty());
         group.set_visible(meta_vis);
+        news_group.set_visible(news_vis);
         telemetry_group.set_visible(telem_vis);
-        meta_vis || telem_vis
+        meta_vis || news_vis || telem_vis
     });
 
     (sync, filter)

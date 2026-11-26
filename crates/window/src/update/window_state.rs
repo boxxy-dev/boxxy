@@ -19,8 +19,9 @@ pub fn save_window_state(inner: &mut AppWindowInner, width: i32, height: i32, is
 
 fn finalize_window_close(inner_ref: &Rc<RefCell<AppWindowInner>>) {
     let window = {
-        let inner = inner_ref.borrow();
+        let mut inner = inner_ref.borrow_mut();
         inner.force_close.set(true);
+        super::broadcast::teardown_active_toast_programmatically(&mut inner);
         inner.command_palette.unparent();
         inner.window.clone()
     };
@@ -199,6 +200,7 @@ fn only_ui_chrome_changed(prev: &Settings, next: &Settings) -> bool {
     probe.colored_tabs = next.colored_tabs;
     probe.dim_inactive_panes = next.dim_inactive_panes;
     probe.pane_move_handle = next.pane_move_handle;
+    probe.enable_broadcasts = next.enable_broadcasts;
     probe == *next
 }
 
@@ -348,6 +350,12 @@ pub fn settings_changed(inner: &mut AppWindowInner, settings: Settings) {
 
     if prev.smart_tab_naming != settings.smart_tab_naming {
         super::tab_bar_sync::sync_tab_titles(inner);
+    }
+
+    if prev.enable_broadcasts && !settings.enable_broadcasts {
+        super::broadcast::teardown_active_toast_programmatically(inner);
+    } else if !prev.enable_broadcasts && settings.enable_broadcasts {
+        let _ = inner.tx.send_blocking(AppInput::CheckPendingBroadcast);
     }
 }
 

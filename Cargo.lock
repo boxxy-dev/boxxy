@@ -867,6 +867,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "boxxy-broadcast"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "boxxy-db",
+ "boxxy-preferences",
+ "boxxy-sys-utils",
+ "chrono",
+ "log",
+ "parking_lot 0.13.0",
+ "rand 0.10.4",
+ "reqwest 0.13.5",
+ "serde",
+ "serde_json",
+ "serial_test",
+ "tempfile",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
 name = "boxxy-claw"
 version = "0.1.0"
 dependencies = [
@@ -1048,6 +1070,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "boxxy-sys-utils",
+ "chrono",
  "log",
  "serde",
  "serde_json",
@@ -1279,6 +1302,7 @@ dependencies = [
  "anyhow",
  "async-channel",
  "boxxy-bookmarks",
+ "boxxy-broadcast",
  "boxxy-claw-protocol",
  "boxxy-claw-ui",
  "boxxy-command-palette",
@@ -1289,6 +1313,7 @@ dependencies = [
  "boxxy-sys-utils",
  "boxxy-terminal",
  "boxxy-themes",
+ "boxxy-viewer",
  "chrono",
  "flate2",
  "futures-util",
@@ -1297,6 +1322,7 @@ dependencies = [
  "home",
  "libadwaita",
  "log",
+ "parking_lot 0.13.0",
  "rand 0.10.4",
  "reqwest 0.13.5",
  "self_update",

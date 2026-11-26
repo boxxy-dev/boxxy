@@ -9,7 +9,7 @@ pub use parser::markdown::{
     escape_pango, escape_pango_attr, normalize_fence_language, parse_markdown, strip_pango_markup,
     write_escaped_pango, write_escaped_pango_attr,
 };
-pub use registry::ViewerRegistry;
+pub use registry::{LinkSafetyPolicy, ViewerRegistry};
 pub use renderer::code::{
     AUTO_COLLAPSE_CODE_LINES, CodeBlockWidget, always_expand_code_blocks,
     code_blocks_policy_generation, set_always_expand_code_blocks,

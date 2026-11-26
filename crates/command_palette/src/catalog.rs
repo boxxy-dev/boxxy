@@ -207,6 +207,8 @@ pub const PREFERENCES_CATEGORIES: [PreferencesCategorySpec; 12] = [
             "license",
             "website",
             "credits",
+            "news",
+            "broadcasts",
         ],
     },
 ];
@@ -455,6 +457,14 @@ pub(super) fn builtin_commands() -> Vec<CommandItem> {
         CommandItem::action("What's New", "win.whats-new").with_keywords([
             "changelog",
             "release notes",
+            "updates",
+        ]),
+    );
+    items.push(
+        CommandItem::action("Boxxy News", "win.boxxy-news").with_keywords([
+            "broadcasts",
+            "announcements",
+            "news",
             "updates",
         ]),
     );

@@ -376,6 +376,7 @@ ID=synthetic
             "/dev/boxxy/BoxxyTerminal/prompts/claw.md",
             "/dev/boxxy/BoxxyTerminal/ui/preferences.ui",
             "/dev/boxxy/BoxxyTerminal/ui/welcome_dialog.ui",
+            "/dev/boxxy/BoxxyTerminal/ui/boxxy_news_dialog.ui",
             "/dev/boxxy/BoxxyTerminal/ui/widgets/avatar_crop_dialog.ui",
             "/dev/boxxy/BoxxyTerminal/sounds/task.wav",
             "/dev/boxxy/BoxxyTerminal/sounds/timer.wav",

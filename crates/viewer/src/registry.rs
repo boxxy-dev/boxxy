@@ -4,16 +4,42 @@ use gtk4 as gtk;
 
 const BUILTIN_RENDERER_COUNT: usize = 5;
 
+/// Controls which hyperlink schemes and media sources a [`ViewerRegistry`] permits.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum LinkSafetyPolicy {
+    /// Standard local terminal/Claw mode: allows `http://`, `https://`, `mailto:`, `file://`,
+    /// local `/abs/path` launches, and local `ffmpeg` media thumbnails.
+    #[default]
+    LocalWorkspace,
+    /// Hardened remote-content mode (used by `Boxxy News`): allows strictly `https://` links
+    /// via `GtkUriLauncher`, disables `GtkFileLauncher` and `ffmpeg`, and restricts images to
+    /// allowlisted Boxxy HTTPS origins.
+    RemoteHttpsOnly,
+}
+
 pub struct ViewerRegistry {
     renderers: Vec<Box<dyn BlockRenderer>>,
+    link_safety: LinkSafetyPolicy,
 }
 
 impl ViewerRegistry {
     /// Creates a new registry equipped with the standard text, table, code, image, and diff renderers.
     #[must_use]
     pub fn new_with_defaults() -> Self {
+        Self::with_policy(LinkSafetyPolicy::LocalWorkspace)
+    }
+
+    /// Creates a hardened registry for untrusted/remote Markdown (`LinkSafetyPolicy::RemoteHttpsOnly`).
+    #[must_use]
+    pub fn new_remote_safe() -> Self {
+        Self::with_policy(LinkSafetyPolicy::RemoteHttpsOnly)
+    }
+
+    #[must_use]
+    pub fn with_policy(link_safety: LinkSafetyPolicy) -> Self {
         let mut registry = Self {
             renderers: Vec::with_capacity(BUILTIN_RENDERER_COUNT + 2),
+            link_safety,
         };
 
         // Standard renderers
@@ -24,6 +50,11 @@ impl ViewerRegistry {
         registry.register(Box::new(crate::renderer::diff::DiffRenderer));
 
         registry
+    }
+
+    #[must_use]
+    pub const fn link_safety(&self) -> LinkSafetyPolicy {
+        self.link_safety
     }
 
     /// Registers a custom renderer. Custom renderers take precedence over defaults

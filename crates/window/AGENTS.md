@@ -23,6 +23,7 @@ This crate follows a modular **Model-View-Update (MVU)** architecture:
     - **`update/notifications.rs`**: In-app toast and desktop update notification pipeline, update details dialog, and async character reminder toast widgets.
     - **`update/welcome_dialog.rs`**: First-boot 4:3 full-bleed `AdwDialog` (`840×630`, `resources/ui/welcome_dialog.ui`) playing `resources/videos/welcome.mp4` without player chrome, with floating **Play again** and **Let's Go** controls, `Escape` dismissal, GStreamer teardown on close, and Command Palette re-launch (`win.welcome`).
     - **`update/whats_new_dialog.rs`**: Post-update "What's New" `AdwDialog` controller, commit detail pager, and non-blocking GitHub changelog population.
+    - **`update/broadcast.rs` & `update/broadcast_dialog.rs`**: **Boxxy News** persistent `AdwToast` lifecycle guard (`timeout = 0`, multi-window deduplication, modal deferral until `What's New` / `Welcome` closes, and `ToastExitReason` separating `×` user dismissal from programmatic window-close teardown) and two-page `AdwDialog` reader (`resources/ui/boxxy_news_dialog.ui`, `win.boxxy-news` / `win.open-news-article`) rendering cached announcements via `StructuredViewer::new_remote_safe()`.
     - **`update/window_state.rs`**: Window geometry persistence, diff-aware settings synchronization, and sidebar navigation.
 
 ## Key Features

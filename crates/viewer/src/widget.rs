@@ -254,6 +254,13 @@ pub struct StructuredViewer {
 }
 
 impl StructuredViewer {
+    /// Creates a new `StructuredViewer` hardened for untrusted/remote Markdown
+    /// ([`crate::LinkSafetyPolicy::RemoteHttpsOnly`]).
+    #[must_use]
+    pub fn new_remote_safe() -> Self {
+        Self::new(Rc::new(ViewerRegistry::new_remote_safe()))
+    }
+
     /// Creates a new `StructuredViewer` with the given registry.
     #[must_use]
     pub fn new(registry: Rc<ViewerRegistry>) -> Self {
@@ -469,6 +476,29 @@ mod tests {
             viewer.set_content("Rebound paragraph\n\n```rust\nfn rebound() {}\n```");
             assert_eq!(viewer.widget().first_child().as_ref(), Some(&first_para));
             assert_eq!(viewer.widget().last_child().as_ref(), Some(&code_w1));
+        });
+    }
+
+    #[test]
+    fn remote_safe_viewer_hides_disallowed_local_and_third_party_images() {
+        crate::run_gtk_test(|| {
+            let viewer = StructuredViewer::new_remote_safe();
+            assert_eq!(
+                viewer.state.registry.link_safety(),
+                crate::LinkSafetyPolicy::RemoteHttpsOnly
+            );
+            viewer.set_content(
+                "Safe paragraph with [HTTPS link](https://boxxy.dev/news/)\n\n\
+                 ![local](/etc/hosts)\n\n\
+                 ![tracker](https://tracker.example.com/pixel.png)",
+            );
+            let first = viewer.widget().first_child().expect("paragraph rendered");
+            assert!(first.has_css_class("viewer-paragraph"));
+            let second = first.next_sibling().expect("gallery placeholder");
+            assert!(
+                !second.is_visible(),
+                "disallowed images must be hidden in RemoteHttpsOnly mode"
+            );
         });
     }
 }

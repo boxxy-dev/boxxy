@@ -96,6 +96,34 @@ CREATE TABLE IF NOT EXISTS telemetry_journal (
     attributes_json TEXT NOT NULL DEFAULT '{}'
 );
 
+CREATE TABLE IF NOT EXISTS broadcast_articles (
+    id TEXT PRIMARY KEY,
+    slug TEXT NOT NULL,
+    title TEXT NOT NULL,
+    summary TEXT NOT NULL,
+    body_md TEXT NOT NULL,
+    category TEXT NOT NULL,
+    status TEXT NOT NULL CHECK (status IN ('published', 'archived')),
+    notify INTEGER NOT NULL DEFAULT 1,
+    action_label TEXT,
+    action_url TEXT,
+    published_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    revision INTEGER NOT NULL DEFAULT 1 CHECK (revision > 0),
+    cached_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS broadcast_receipts (
+    id TEXT PRIMARY KEY,
+    disposition TEXT NOT NULL CHECK (disposition IN ('pending', 'read', 'dismissed', 'baseline')),
+    updated_at_ms INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS broadcast_meta (
+    key TEXT PRIMARY KEY,
+    value TEXT NOT NULL
+);
+
 -- Relational indexes for hot-path lookups, FK cascades, and background hygiene/dreaming
 CREATE INDEX IF NOT EXISTS idx_sessions_pinned_updated ON sessions(pinned DESC, updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_claw_events_session_id ON claw_events(session_id);
@@ -110,6 +138,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_telemetry_journal_coalesce
     ON telemetry_journal(schema_version, install_id, session_id, day_bucket, metric_name, attributes_json);
 CREATE INDEX IF NOT EXISTS idx_telemetry_journal_recorded_at
     ON telemetry_journal(recorded_at_ms ASC, id ASC);
+CREATE INDEX IF NOT EXISTS idx_broadcast_articles_published
+    ON broadcast_articles (published_at DESC, id DESC);
+CREATE INDEX IF NOT EXISTS idx_broadcast_receipts_disposition
+    ON broadcast_receipts (disposition, updated_at_ms DESC);
 
 -- FTS5 External-Content Indexes & Column-Scoped Triggers
 

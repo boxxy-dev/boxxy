@@ -1,7 +1,8 @@
 use crate::parser::blocks::{ContentBlock, TableAlignment, TableCell};
 use crate::parser::markdown::strip_pango_markup;
-use crate::renderer::image::build_table_image_card;
-use crate::renderer::text::connect_label_links;
+use crate::registry::LinkSafetyPolicy;
+use crate::renderer::image::{build_table_image_card, is_allowed_media_url};
+use crate::renderer::text::connect_label_links_with_policy;
 use crate::renderer::{BlockRenderer, RenderContext};
 use gtk4 as gtk;
 use gtk4::prelude::*;
@@ -111,9 +112,10 @@ impl BlockRenderer for TableRenderer {
     fn render_with_context(
         &self,
         block: &ContentBlock,
-        _registry: &crate::registry::ViewerRegistry,
+        registry: &crate::registry::ViewerRegistry,
         ctx: &RenderContext,
     ) -> gtk::Widget {
+        let policy = registry.link_safety();
         let ContentBlock::Table {
             alignments,
             headers,
@@ -222,7 +224,7 @@ impl BlockRenderer for TableRenderer {
                     .unwrap_or(TableAlignment::Left);
                 let header_cell = TableCell::new(markup.to_string(), Vec::new());
                 let hexpand = !col_is_media_only.get(col_idx).copied().unwrap_or(false);
-                let cell = build_table_cell(&header_cell, align, true, false, hexpand, ctx);
+                let cell = build_table_cell(&header_cell, align, true, false, hexpand, policy, ctx);
                 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                 grid.attach(&cell, col_idx as i32, current_grid_row, 1, 1);
             }
@@ -239,7 +241,7 @@ impl BlockRenderer for TableRenderer {
                     .copied()
                     .unwrap_or(TableAlignment::Left);
                 let hexpand = !col_is_media_only.get(col_idx).copied().unwrap_or(false);
-                let cell = build_table_cell(cell_data, align, false, is_odd, hexpand, ctx);
+                let cell = build_table_cell(cell_data, align, false, is_odd, hexpand, policy, ctx);
                 #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
                 grid.attach(&cell, col_idx as i32, current_grid_row, 1, 1);
             }
@@ -261,6 +263,7 @@ fn build_table_cell(
     is_header: bool,
     is_odd_row: bool,
     hexpand: bool,
+    policy: LinkSafetyPolicy,
     ctx: &RenderContext,
 ) -> gtk::Box {
     let cell_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
@@ -309,11 +312,16 @@ fn build_table_cell(
             label.set_markup(markup);
         }
 
-        connect_label_links(&label);
+        connect_label_links_with_policy(&label, policy);
         cell_box.append(&label);
     }
 
-    if !cell.images.is_empty() {
+    let allowed_images: Vec<_> = cell
+        .images
+        .iter()
+        .filter(|img| is_allowed_media_url(&img.url, policy))
+        .collect();
+    if !allowed_images.is_empty() {
         let media_box = gtk::Box::new(gtk::Orientation::Vertical, 6);
         media_box.set_valign(gtk::Align::Center);
         media_box.set_vexpand(true);
@@ -329,7 +337,7 @@ fn build_table_cell(
         };
         media_box.set_halign(card_halign);
 
-        for img in &cell.images {
+        for img in allowed_images {
             let card = build_table_image_card(img, ctx);
             media_box.append(&card);
         }

@@ -5,6 +5,7 @@ use crate::cache::{
 };
 use crate::parser::blocks::{ContentBlock, GalleryItem};
 use crate::parser::markdown::strip_pango_markup;
+use crate::registry::LinkSafetyPolicy;
 use crate::renderer::{BlockRenderer, RenderContext};
 use boxxy_assets::image::{
     MAX_THUMBNAIL_INPUT_BYTES, ThumbnailOutput, ThumbnailSpec, generate_thumbnail,
@@ -93,6 +94,43 @@ pub fn detect_media_kind(url: &str) -> MediaKind {
         MediaKind::Audio
     } else {
         MediaKind::Image
+    }
+}
+
+/// Checks whether a Markdown media URL is allowed under `policy`.
+///
+/// In [`LinkSafetyPolicy::RemoteHttpsOnly`], local paths, `file://`, `http://`, audio/video
+/// extensions (never invoking `ffmpeg`), and third-party tracking domains are rejected; only
+/// static `https://` images hosted on `boxxy.dev` (`*.boxxy.dev`) or Boxxy's Supabase storage
+/// (`qfwhesnmixgmczkdnvsu.supabase.co`) are permitted.
+#[must_use]
+pub fn is_allowed_media_url(url: &str, policy: LinkSafetyPolicy) -> bool {
+    match policy {
+        LinkSafetyPolicy::LocalWorkspace => true,
+        LinkSafetyPolicy::RemoteHttpsOnly => {
+            let trimmed = url.trim();
+            if trimmed.chars().any(|c| c.is_whitespace() || c.is_control()) {
+                return false;
+            }
+            let Some(rest) = trimmed.strip_prefix("https://") else {
+                return false;
+            };
+            if detect_media_kind(trimmed) != MediaKind::Image {
+                return false;
+            }
+            let authority = rest.split(['/', '?', '#']).next().unwrap_or("");
+            if authority.is_empty() || authority.contains('@') {
+                return false;
+            }
+            let host = authority
+                .split(':')
+                .next()
+                .unwrap_or("")
+                .to_ascii_lowercase();
+            host == "boxxy.dev"
+                || host.ends_with(".boxxy.dev")
+                || host == "qfwhesnmixgmczkdnvsu.supabase.co"
+        }
     }
 }
 
@@ -1210,14 +1248,35 @@ impl BlockRenderer for ImageRenderer {
     fn render_with_context(
         &self,
         block: &ContentBlock,
-        _registry: &crate::registry::ViewerRegistry,
+        registry: &crate::registry::ViewerRegistry,
         ctx: &RenderContext,
     ) -> gtk::Widget {
+        let policy = registry.link_safety();
         match block {
             ContentBlock::Image { url, title, alt } => {
+                if !is_allowed_media_url(url, policy) {
+                    let hidden = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                    hidden.set_visible(false);
+                    return hidden.upcast();
+                }
                 build_image_card(url, title, alt, None, CardLayout::Standalone, ctx)
             }
-            ContentBlock::ImageGallery { items } => render_gallery(items, ctx),
+            ContentBlock::ImageGallery { items } => {
+                if policy == LinkSafetyPolicy::RemoteHttpsOnly {
+                    let allowed: Vec<GalleryItem> = items
+                        .iter()
+                        .filter(|item| is_allowed_media_url(&item.url, policy))
+                        .cloned()
+                        .collect();
+                    if allowed.is_empty() {
+                        let hidden = gtk::Box::new(gtk::Orientation::Vertical, 0);
+                        hidden.set_visible(false);
+                        return hidden.upcast();
+                    }
+                    return render_gallery(&allowed, ctx);
+                }
+                render_gallery(items, ctx)
+            }
             _ => unreachable!(),
         }
     }
@@ -1307,5 +1366,37 @@ mod tests {
         let (tcw, tch) = compute_bounded_card_dims(640, 360, TABLE_CELL_MAX_W, TABLE_CELL_MAX_H);
         assert_eq!(tcw, 200);
         assert_eq!(tch, 113 + CARD_FOOTER_HEIGHT);
+    }
+
+    #[test]
+    fn remote_https_only_media_allowlist_blocks_local_video_and_third_party_urls() {
+        assert!(is_allowed_media_url(
+            "https://boxxy.dev/assets/banner.webp",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(is_allowed_media_url(
+            "https://qfwhesnmixgmczkdnvsu.supabase.co/storage/v1/object/public/news/hero.png",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_media_url(
+            "/etc/hosts",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_media_url(
+            "file:///tmp/synthetic.png",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_media_url(
+            "https://boxxy.dev/videos/clip.mp4",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_media_url(
+            "https://tracker.example.com/pixel.png",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
+        assert!(!is_allowed_media_url(
+            "https://boxxy.dev@evil.example.com/pixel.png",
+            LinkSafetyPolicy::RemoteHttpsOnly
+        ));
     }
 }

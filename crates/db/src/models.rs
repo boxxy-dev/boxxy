@@ -147,6 +147,56 @@ pub struct HygieneStats {
     pub deleted_quarantine_noise: u64,
 }
 
+/// Validated remote announcement payload passed to [`crate::store::Store::reconcile_broadcast_feed`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BroadcastArticleUpsert {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    pub summary: String,
+    pub body_md: String,
+    pub category: String,
+    pub status: String,
+    pub notify: bool,
+    pub action_label: Option<String>,
+    pub action_url: Option<String>,
+    pub published_at: String,
+    pub updated_at: String,
+    pub revision: i64,
+}
+
+/// Locally cached Boxxy News article joined with its per-UUID user disposition.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, FromRow)]
+pub struct StoredBroadcastArticle {
+    pub id: String,
+    pub slug: String,
+    pub title: String,
+    pub summary: String,
+    pub body_md: String,
+    pub category: String,
+    pub status: String,
+    pub notify: bool,
+    pub action_label: Option<String>,
+    pub action_url: Option<String>,
+    pub published_at: String,
+    pub updated_at: String,
+    pub revision: i64,
+    pub cached_at_ms: i64,
+    pub disposition: String,
+}
+
+impl StoredBroadcastArticle {
+    /// Returns `true` when the user has not yet opened this post in `Boxxy News`.
+    ///
+    /// Historical `'baseline'` items seeded on first install return `false` so fresh
+    /// installations never display fake unread badges, whereas newly arrived `'pending'`
+    /// or toast-closed `'dismissed'` announcements show an unread dot until read.
+    #[must_use]
+    pub fn is_unread(&self) -> bool {
+        matches!(self.disposition.as_str(), "pending" | "dismissed")
+    }
+}
+
 impl Interaction {
     #[must_use]
     pub fn parse_embedding(blob: Option<&[u8]>) -> Option<Vec<f32>> {

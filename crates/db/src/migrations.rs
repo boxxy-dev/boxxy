@@ -27,7 +27,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 const LEGACY_MIN_SUPPORTED_PRAGMA_VERSION: i32 = 15;
 
 /// Informational `PRAGMA user_version` written alongside journal updates for external SQLite tools.
-const INFORMATIONAL_USER_VERSION: i32 = 17;
+const INFORMATIONAL_USER_VERSION: i32 = 18;
 
 const SCHEMA_LATEST_SQL: &str = include_str!("../migrations/schema_latest.sql");
 
@@ -68,6 +68,13 @@ pub const MIGRATIONS: &[Migration] = &[
         foreign_keys: true,
         up: MigrationUp::Sql(include_str!(
             "../migrations/20261115000002_upgrade_telemetry_journal.sql"
+        )),
+    },
+    Migration {
+        id: "20261126000001_add_broadcast_tables",
+        foreign_keys: true,
+        up: MigrationUp::Sql(include_str!(
+            "../migrations/20261126000001_add_broadcast_tables.sql"
         )),
     },
 ];

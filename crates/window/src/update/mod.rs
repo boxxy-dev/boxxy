@@ -1,3 +1,5 @@
+pub mod broadcast;
+pub mod broadcast_dialog;
 pub mod claw;
 pub mod close_dialog;
 pub mod detached_sessions;
@@ -148,6 +150,16 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::OpenWhatsNew => {
             whats_new_dialog::open_whats_new(&inner);
+        }
+        AppInput::OpenBroadcasts => {
+            broadcast_dialog::open_broadcasts(inner_ref, &mut inner);
+        }
+        AppInput::OpenBroadcastArticle(article_id) => {
+            broadcast_dialog::open_broadcast_article(inner_ref, &mut inner, article_id);
+        }
+        AppInput::CheckPendingBroadcast => {
+            drop(inner);
+            broadcast::check_pending_broadcast(inner_ref);
         }
         AppInput::OpenInFiles => {
             if let Some(tc) = inner.active_tab() {

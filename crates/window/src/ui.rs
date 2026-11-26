@@ -265,8 +265,8 @@ impl AppWindow {
             let _ = tx_suspended.send_blocking(AppInput::WindowAnimationStateChanged);
         });
 
-        // Centralized focus restoration whenever any `AdwDialog` / `AdwAlertDialog`
-        // finishes closing on this window.
+        // Centralized focus restoration (and deferred broadcast toast presentation)
+        // whenever any `AdwDialog` / `AdwAlertDialog` finishes closing on this window.
         let tx_dialog_focus = tx.clone();
         window.connect_visible_dialog_notify(move |win| {
             use libadwaita::prelude::AdwApplicationWindowExt;
@@ -274,6 +274,7 @@ impl AppWindow {
                 let tx_idle = tx_dialog_focus.clone();
                 gtk::glib::idle_add_local_once(move || {
                     let _ = tx_idle.send_blocking(AppInput::FocusActiveTerminal);
+                    let _ = tx_idle.send_blocking(AppInput::CheckPendingBroadcast);
                 });
             }
         });
@@ -386,6 +387,20 @@ impl AppWindow {
             }
         });
 
+        let mut broadcast_rx = boxxy_broadcast::subscribe_events();
+        let tx_broadcast = tx.clone();
+        boxxy_sys_utils::runtime().spawn(async move {
+            loop {
+                match broadcast_rx.recv().await {
+                    Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+                if tx_broadcast.send(AppInput::CheckPendingBroadcast).await.is_err() {
+                    break;
+                }
+            }
+        });
+
         let inner = AppWindowInner {
             window: window.clone(),
             tabs: Vec::new(),
@@ -415,6 +430,8 @@ impl AppWindow {
             toast_overlay,
             frosted_container,
             active_update_notification: None,
+            active_broadcast_toast: None,
+            open_news_dialog: None,
             last_notified_broken_default: None,
             initial_launch: Some(crate::init::TabLaunchSpec {
                 working_dir: init.working_dir,
@@ -515,6 +532,7 @@ impl AppWindow {
                 if let Some(inner_rc) = inner_weak_destroy.upgrade()
                     && let Ok(mut inner) = inner_rc.try_borrow_mut()
                 {
+                    crate::update::broadcast::teardown_active_toast_programmatically(&mut inner);
                     inner.command_palette.unparent();
                     inner.sidebar_menu.unparent();
                     if let Some(tm) = inner.tab_menu.take() {
@@ -737,6 +755,10 @@ impl AppWindow {
             });
         } else if !boxxy_sys_utils::can_self_update() {
             log::debug!("Self-updater is disabled. Skipping update check.");
+        }
+
+        if !is_drag_window {
+            boxxy_broadcast::start_background_poller();
         }
 
         window.present();

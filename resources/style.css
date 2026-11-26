@@ -1677,6 +1677,97 @@ button.whats-new-nav-btn:disabled {
     line-height: 1.45;
 }
 
+/* --- Boxxy News Dialog --- */
+button.boxxy-news-row {
+    min-height: 54px;
+    padding: 12px 14px;
+    border-radius: 10px;
+    font-weight: 400;
+    background: alpha(currentColor, 0.04);
+    background-color: alpha(currentColor, 0.04);
+    background-image: none;
+    border: 1px solid alpha(currentColor, 0.08);
+    transition: background-color 120ms ease, border-color 120ms ease;
+}
+
+button.boxxy-news-row:hover,
+button.boxxy-news-row:focus-visible {
+    background: alpha(@accent_bg_color, 0.14);
+    background-color: alpha(@accent_bg_color, 0.14);
+    background-image: none;
+    border-color: alpha(@accent_color, 0.35);
+}
+
+button.boxxy-news-row:active {
+    background: alpha(@accent_bg_color, 0.24);
+    background-color: alpha(@accent_bg_color, 0.24);
+    background-image: none;
+}
+
+.boxxy-news-unread-dot {
+    min-width: 8px;
+    min-height: 8px;
+    border-radius: 9999px;
+    background-color: @accent_bg_color;
+}
+
+label.boxxy-news-cat-pill {
+    background-color: alpha(@accent_bg_color, 0.18);
+    color: @accent_color;
+    border: 1px solid alpha(@accent_color, 0.35);
+    border-radius: 9999px;
+    padding: 2px 8px;
+    font-size: 0.68em;
+    font-weight: 800;
+    letter-spacing: 0.5px;
+}
+
+label.boxxy-news-cat-pill.is-feature {
+    background-color: alpha(@boxxy_secondary_bg_color, 0.18);
+    color: @boxxy_secondary_color;
+    border-color: alpha(@boxxy_secondary_color, 0.35);
+}
+
+label.boxxy-news-cat-pill.is-community {
+    background-color: alpha(@boxxy_highlight_bg_color, 0.18);
+    color: @boxxy_highlight_color;
+    border-color: alpha(@boxxy_highlight_color, 0.35);
+}
+
+label.boxxy-news-cat-pill.is-security {
+    background-color: alpha(@error_bg_color, 0.18);
+    color: @error_color;
+    border-color: alpha(@error_color, 0.35);
+}
+
+label.boxxy-news-cat-pill.is-maintenance {
+    background-color: alpha(currentColor, 0.08);
+    color: inherit;
+    border-color: alpha(currentColor, 0.18);
+    opacity: 0.78;
+}
+
+.boxxy-news-row-title {
+    font-size: 0.98em;
+    font-weight: 700;
+}
+
+.boxxy-news-row-summary {
+    font-size: 0.86em;
+    line-height: 1.38;
+    opacity: 0.76;
+}
+
+.boxxy-news-chevron {
+    opacity: 0.45;
+    transition: opacity 120ms ease;
+}
+
+button.boxxy-news-row:hover .boxxy-news-chevron,
+button.boxxy-news-row:focus-visible .boxxy-news-chevron {
+    opacity: 0.90;
+}
+
 /* --- First-Boot Welcome Video Dialog --- */
 .welcome-stage {
     background-color: #0e1017;
