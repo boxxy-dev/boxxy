@@ -441,6 +441,17 @@ pub(super) fn builtin_commands() -> Vec<CommandItem> {
 
     // ── Meta & Diagnostics ───────────────────────────────────────────────────
     items.push(
+        CommandItem::action("Welcome Screen", "win.welcome").with_keywords([
+            "first boot",
+            "first run",
+            "welcome",
+            "onboarding",
+            "intro",
+            "video",
+            "tour",
+        ]),
+    );
+    items.push(
         CommandItem::action("What's New", "win.whats-new").with_keywords([
             "changelog",
             "release notes",

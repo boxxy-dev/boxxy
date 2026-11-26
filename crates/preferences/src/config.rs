@@ -561,6 +561,50 @@ fn atomic_write_file(path: &Path, content: &str) -> std::io::Result<()> {
     Ok(())
 }
 
+const FIRST_BOOT_PENDING_FILE: &str = ".first_boot_pending";
+
+/// Seeds `<config_dir>/.first_boot_pending` when initializing a brand-new installation
+/// (no prior `state.json`, `last_seen_commit`, `whats_new_last.json`, or `boxxyclaw/boxxy.db`).
+pub(crate) fn seed_first_boot_pending_if_fresh_in(config_dir: &Path) {
+    let existing_install_markers = [
+        config_dir.join("state.json"),
+        config_dir.join("last_seen_commit"),
+        config_dir.join("whats_new_last.json"),
+        config_dir.join("boxxyclaw/boxxy.db"),
+    ];
+    if existing_install_markers.iter().any(|p| p.exists()) {
+        return;
+    }
+    if fs::create_dir_all(config_dir).is_ok() {
+        let _ = atomic_write_file(&config_dir.join(FIRST_BOOT_PENDING_FILE), "1\n");
+    }
+}
+
+/// Atomically consumes `<config_dir>/.first_boot_pending`, returning `true` once on the
+/// initial interactive launch of a brand-new installation.
+#[must_use]
+pub fn take_first_boot_pending_in(config_dir: &Path) -> bool {
+    let marker = config_dir.join(FIRST_BOOT_PENDING_FILE);
+    match fs::remove_file(&marker) {
+        Ok(()) => true,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => false,
+        Err(e) => {
+            log::warn!(
+                "Failed to consume first-boot marker '{}': {e}",
+                marker.display()
+            );
+            false
+        }
+    }
+}
+
+/// Checks and consumes `.first_boot_pending` in [`boxxy_sys_utils::get_config_dir()`].
+/// Performs synchronous filesystem I/O; call off the GTK main thread via `spawn_blocking`.
+#[must_use]
+pub fn take_first_boot_pending() -> bool {
+    take_first_boot_pending_in(&boxxy_sys_utils::get_config_dir())
+}
+
 impl Settings {
     fn get_path() -> Option<PathBuf> {
         let config_dir = boxxy_sys_utils::get_config_dir();
@@ -767,6 +811,8 @@ You can add your own sensitive paths here. One path per line. Lines starting wit
         SETTINGS_CACHE.store(Arc::new(settings));
 
         if needs_initial_save {
+            #[cfg(not(test))]
+            seed_first_boot_pending_if_fresh_in(&boxxy_sys_utils::get_config_dir());
             Self::persist_latest_to_disk();
         }
     }
@@ -1927,5 +1973,20 @@ mod tests {
         // Reset dev options so sibling tests see default config resolution
         boxxy_sys_utils::configure_dev_options(boxxy_sys_utils::CliDevOverrides::default());
         let _ = boxxy_ai_core::refresh_chatgpt_auth_status();
+    }
+
+    #[test]
+    fn first_boot_marker_seeds_once_on_clean_dir_and_skips_existing_installs() {
+        let fresh_tmp = tempfile::tempdir().expect("fresh tempdir");
+        seed_first_boot_pending_if_fresh_in(fresh_tmp.path());
+        assert!(take_first_boot_pending_in(fresh_tmp.path()));
+        assert!(!take_first_boot_pending_in(fresh_tmp.path()));
+
+        // Existing install with `state.json` or `last_seen_commit` must not seed first-boot marker.
+        let existing_tmp = tempfile::tempdir().expect("existing tempdir");
+        std::fs::write(existing_tmp.path().join("last_seen_commit"), "a1b2c3d")
+            .expect("write commit marker");
+        seed_first_boot_pending_if_fresh_in(existing_tmp.path());
+        assert!(!take_first_boot_pending_in(existing_tmp.path()));
     }
 }

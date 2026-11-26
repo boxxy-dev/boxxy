@@ -252,6 +252,12 @@ button.whats-new-nav-btn {
     border-radius: var(--boxxy-radius-sm);
 }
 
+/* Reset Layer 1 Adwaita fallback border on floating Welcome replay CTA so it matches `.pill` geometry */
+dialog button.welcome-replay-btn,
+button.welcome-replay-btn {
+    border: none;
+}
+
 .boxxy-link {
     outline: var(--boxxy-border-thin) solid transparent;
     outline-offset: -1.5px;

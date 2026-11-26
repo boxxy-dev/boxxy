@@ -6,6 +6,7 @@ pub mod notifications;
 pub mod split;
 pub mod tab_bar_sync;
 pub mod tabs;
+pub mod welcome_dialog;
 pub mod whats_new_dialog;
 pub mod window_state;
 
@@ -141,6 +142,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::OpenBookmarks => {
             tabs::open_bookmarks(&mut inner);
+        }
+        AppInput::OpenWelcome => {
+            welcome_dialog::open_welcome(&inner);
         }
         AppInput::OpenWhatsNew => {
             whats_new_dialog::open_whats_new(&inner);
@@ -342,6 +346,9 @@ pub fn update(inner_ref: &Rc<RefCell<AppWindowInner>>, input: AppInput) {
         }
         AppInput::ApplyUpdateAndRestart => {
             notifications::apply_update_and_restart(&inner);
+        }
+        AppInput::ShowWelcomeDialog => {
+            welcome_dialog::show_welcome_dialog(&inner);
         }
         AppInput::ShowWhatsNewDialog(pending, summary) => {
             whats_new_dialog::show_whats_new_dialog(&inner, pending, summary.map(|b| *b));

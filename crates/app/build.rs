@@ -55,6 +55,15 @@ fn main() {
     // 5. Notification audio cues (`.wav` kept uncompressed for seekable zero-copy GStreamer playback).
     collect_dir_files(resources_dir, "sounds", false, &["wav"], &mut entries);
 
+    // 6. Welcome / onboarding videos (kept uncompressed for seekable zero-copy GMemoryInputStream playback).
+    collect_dir_files(
+        resources_dir,
+        "videos",
+        false,
+        &["mp4", "webm"],
+        &mut entries,
+    );
+
     let xml = render_gresource_xml(&entries);
 
     // Best-effort sync of the checked-in manifest in dev checkouts without failing builds
@@ -80,7 +89,10 @@ fn main() {
 }
 
 fn should_compress_extension(ext_lower: &str) -> bool {
-    !matches!(ext_lower, "png" | "jpg" | "jpeg" | "webp" | "wav")
+    !matches!(
+        ext_lower,
+        "png" | "jpg" | "jpeg" | "webp" | "wav" | "mp4" | "webm"
+    )
 }
 
 fn collect_dir_files(

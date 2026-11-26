@@ -397,6 +397,15 @@ mod tests {
                 CommandKind::PreferencesCategory
             ))
         );
+
+        for welcome_query in ["welcome", "first run", "first boot"] {
+            let hits = ranked_titles(&entries, welcome_query);
+            assert_eq!(
+                hits.first(),
+                Some(&("Welcome Screen".to_string(), CommandKind::Action)),
+                "expected '{welcome_query}' to rank Welcome Screen first, got: {hits:?}"
+            );
+        }
     }
 
     #[test]

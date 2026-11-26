@@ -87,6 +87,7 @@ pub fn setup_actions(
     action_group.add_action(&open_prefs_page);
     add_action!("bookmarks", AppInput::OpenBookmarks);
     add_action!("shortcuts", AppInput::OpenShortcuts);
+    add_action!("welcome", AppInput::OpenWelcome);
     add_action!("whats-new", AppInput::OpenWhatsNew);
     add_action!("about", AppInput::OpenAbout);
     add_action!("open-in-files", AppInput::OpenInFiles);

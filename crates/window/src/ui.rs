@@ -426,7 +426,8 @@ impl AppWindow {
             tx: tx.clone(),
         };
 
-        let is_blank_initial_tab = init.initial_command.is_none()
+        let is_interactive_launch = init.initial_command.is_none();
+        let is_blank_initial_tab = is_interactive_launch
             && inner
                 .initial_launch
                 .as_ref()
@@ -632,22 +633,37 @@ impl AppWindow {
                     let _ = tx_startup.send(AppInput::EnsureInitialTab).await;
                 }
 
-                // Perform What's New marker/cache inspection off the GTK main thread.
-                let whats_new_opt = boxxy_sys_utils::runtime()
-                    .spawn_blocking(|| {
-                        crate::updater::whats_new::take_whats_new_pending().map(|pending| {
-                            let cached =
-                                crate::updater::whats_new::load_cached_changelog_summary(&pending);
-                            (pending, cached)
-                        })
+                // Perform first-boot / What's New marker inspection off the GTK main thread.
+                let startup_dialog = boxxy_sys_utils::runtime()
+                    .spawn_blocking(move || {
+                        let whats_new =
+                            crate::updater::whats_new::take_whats_new_pending().map(|pending| {
+                                let cached =
+                                    crate::updater::whats_new::load_cached_changelog_summary(
+                                        &pending,
+                                    );
+                                (pending, cached)
+                            });
+                        if whats_new.is_some() {
+                            return (whats_new, false);
+                        }
+                        let first_boot =
+                            is_interactive_launch && boxxy_preferences::take_first_boot_pending();
+                        if first_boot {
+                            let _ = crate::sound::ensure_gstreamer_init();
+                        }
+                        (None, first_boot)
                     })
                     .await
-                    .ok()
-                    .flatten();
-                if let Some((pending, cached)) = whats_new_opt {
-                    let _ = tx_startup
-                        .send(AppInput::ShowWhatsNewDialog(pending, cached.map(Box::new)))
-                        .await;
+                    .ok();
+                if let Some((whats_new_opt, first_boot)) = startup_dialog {
+                    if let Some((pending, cached)) = whats_new_opt {
+                        let _ = tx_startup
+                            .send(AppInput::ShowWhatsNewDialog(pending, cached.map(Box::new)))
+                            .await;
+                    } else if first_boot {
+                        let _ = tx_startup.send(AppInput::ShowWelcomeDialog).await;
+                    }
                 }
 
                 if let Ok(detached) = agent.list_detached_sessions_detailed().await {

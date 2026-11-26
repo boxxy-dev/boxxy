@@ -1677,6 +1677,35 @@ button.whats-new-nav-btn:disabled {
     line-height: 1.45;
 }
 
+/* --- First-Boot Welcome Video Dialog --- */
+.welcome-stage {
+    background-color: #0e1017;
+}
+
+button.welcome-replay-btn {
+    background-color: rgba(20, 22, 30, 0.84);
+    background-image: none;
+    color: #f4f5f8;
+    border: 1px solid rgba(255, 255, 255, 0.22);
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
+button.welcome-replay-btn:hover {
+    background-color: rgba(34, 38, 52, 0.94);
+    background-image: none;
+    color: #ffffff;
+    border-color: rgba(255, 255, 255, 0.36);
+}
+
+button.welcome-replay-btn:active {
+    background-color: rgba(14, 16, 23, 0.96);
+    background-image: none;
+}
+
+button.welcome-go-btn {
+    box-shadow: 0 4px 14px rgba(0, 0, 0, 0.45);
+}
+
 /* --- Editable Avatar & Crop Dialog --- */
 button.editable-avatar-btn {
     padding: 0;

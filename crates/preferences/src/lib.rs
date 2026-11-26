@@ -20,5 +20,5 @@ pub use boxxy_ai_core::{is_chatgpt_oauth_signed_in, refresh_chatgpt_account_mode
 pub use component::{PREFERENCE_CATEGORIES, PreferencesComponent};
 pub use config::{
     AppState, AppThemeMode, CursorShape, ImagePreviewTrigger, PaneMoveHandleMode,
-    SETTINGS_EVENT_BUS, Settings,
+    SETTINGS_EVENT_BUS, Settings, take_first_boot_pending,
 };

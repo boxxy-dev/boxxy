@@ -5,6 +5,11 @@ use std::sync::OnceLock;
 
 static GST_READY: OnceLock<bool> = OnceLock::new();
 
+#[must_use]
+pub fn is_gstreamer_ready() -> bool {
+    GST_READY.get().copied().unwrap_or(false)
+}
+
 /// Ensures GStreamer is initialized at most once. Can be called from a background
 /// pre-warm task after window presentation or lazily on first audio playback.
 pub fn ensure_gstreamer_init() -> bool {

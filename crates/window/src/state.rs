@@ -101,6 +101,7 @@ pub enum AppInput {
     OpenMcpPreferences,
     OpenBookmarks,
     OpenShortcuts,
+    OpenWelcome,
     OpenWhatsNew,
     OpenAbout,
     OpenInFiles,
@@ -157,6 +158,7 @@ pub enum AppInput {
     StartUpdateDownload(String, String, String, Option<String>), // (url, date, new_commit, checksum_url)
     UpdateDownloaded(String),
     ApplyUpdateAndRestart,
+    ShowWelcomeDialog,
     ShowWhatsNewDialog(
         crate::updater::whats_new::WhatsNewPending,
         Option<Box<crate::updater::whats_new::ChangelogSummary>>,

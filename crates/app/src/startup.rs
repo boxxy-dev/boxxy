@@ -375,9 +375,11 @@ ID=synthetic
             "/dev/boxxy/BoxxyTerminal/icons/boxxy-window-new-symbolic.svg",
             "/dev/boxxy/BoxxyTerminal/prompts/claw.md",
             "/dev/boxxy/BoxxyTerminal/ui/preferences.ui",
+            "/dev/boxxy/BoxxyTerminal/ui/welcome_dialog.ui",
             "/dev/boxxy/BoxxyTerminal/ui/widgets/avatar_crop_dialog.ui",
             "/dev/boxxy/BoxxyTerminal/sounds/task.wav",
             "/dev/boxxy/BoxxyTerminal/sounds/timer.wav",
+            "/dev/boxxy/BoxxyTerminal/videos/welcome.mp4",
         ] {
             let bytes = gio::resources_lookup_data(required_path, gio::ResourceLookupFlags::NONE)
                 .unwrap_or_else(|e| panic!("missing GResource '{required_path}': {e}"));
