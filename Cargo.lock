@@ -756,7 +756,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-agent"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arboard",
@@ -793,7 +793,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-ai-core"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "base64 0.23.1",
@@ -814,7 +814,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "boxxy-bookmarks",
  "boxxy-cli",
@@ -835,7 +835,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-assets"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "boxxy-sys-utils",
  "image",
@@ -844,7 +844,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-bookmarks"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "boxxy-ai-core",
  "boxxy-core-widgets",
@@ -868,7 +868,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-broadcast"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "boxxy-db",
@@ -890,7 +890,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-claw"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -928,7 +928,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-claw-protocol"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -949,7 +949,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-claw-ui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "boxxy-claw-protocol",
  "boxxy-core-widgets",
@@ -967,7 +967,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-claw-widget"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-channel",
  "boxxy-claw-protocol",
@@ -996,7 +996,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "boxxy-agent",
@@ -1020,7 +1020,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-command-palette"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "boxxy-keybindings",
  "frizbee",
@@ -1031,7 +1031,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-core-toolbox"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1053,7 +1053,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-core-widgets"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "boxxy-assets",
  "boxxy-sys-utils",
@@ -1066,7 +1066,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-db"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "boxxy-sys-utils",
@@ -1081,7 +1081,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-keybindings"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "boxxy-sys-utils",
@@ -1097,7 +1097,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-mcp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-model-selection"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "boxxy-core-widgets",
@@ -1130,7 +1130,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-preferences"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "boxxy-ai-core",
@@ -1157,7 +1157,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-sys-utils"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "directories",
  "libc",
@@ -1173,7 +1173,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-telemetry"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "boxxy-db",
@@ -1193,7 +1193,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-terminal"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "ashpd",
@@ -1227,7 +1227,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-themes"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "boxxy-sys-utils",
@@ -1246,7 +1246,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-viewer"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-channel",
  "boxxy-assets",
@@ -1269,7 +1269,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-vte"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "arc-swap",
  "async-channel",
@@ -1297,7 +1297,7 @@ dependencies = [
 
 [[package]]
 name = "boxxy-window"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-channel",
@@ -7577,7 +7577,7 @@ dependencies = [
 
 [[package]]
 name = "scenario-runner"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "async-channel",

@@ -221,12 +221,12 @@ mod tests {
 
     #[test]
     fn about_version_includes_channel_while_keeping_raw_version_separate() {
-        let raw = "0.1.0+abc1234";
-        assert_eq!(format_about_version(raw, "native"), "0.1.0+abc1234 (native)");
+        let raw = "1.0.0+abc1234";
+        assert_eq!(format_about_version(raw, "native"), "1.0.0+abc1234 (native)");
         assert_eq!(
             format_about_version(raw, "flatpak"),
-            "0.1.0+abc1234 (flatpak)"
+            "1.0.0+abc1234 (flatpak)"
         );
-        assert_eq!(format_about_version(raw, "distro"), "0.1.0+abc1234 (distro)");
+        assert_eq!(format_about_version(raw, "distro"), "1.0.0+abc1234 (distro)");
     }
 }

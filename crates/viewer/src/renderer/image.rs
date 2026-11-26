@@ -416,7 +416,10 @@ impl BoundedCard {
 static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(10))
-        .user_agent("Mozilla/5.0 (X11; Linux x86_64) BoxxyTerminal/0.1")
+        .user_agent(concat!(
+            "Mozilla/5.0 (X11; Linux x86_64) BoxxyTerminal/",
+            env!("CARGO_PKG_VERSION")
+        ))
         .build()
         .unwrap_or_default()
 });

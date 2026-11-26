@@ -11,7 +11,6 @@
 	<summary>The Stupid Linux Terminal</summary>
 	<description>
 	    <p>A Terminal written in GTK and Rust that integrates a blazing fast Claw-like AI!</p>
-	    <p>NOTE: Boxxy is in preview. Short term memories database might get wiped, since Boxxy doesn't support migrations yet</p>
 	</description>
 
     <url type="homepage">https://boxxy.dev/</url>
@@ -52,6 +51,11 @@
   </categories>
 
   <releases>
+    <release version="1.0.0" date="2026-11-26">
+      <description>
+        <p>First stable 1.0.0 release.</p>
+      </description>
+    </release>
     <release version="0.1.0" date="2026-05-12">
       <description>
         <p>Initial</p>

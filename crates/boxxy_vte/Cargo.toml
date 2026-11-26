@@ -1,6 +1,6 @@
 [package]
 name = "boxxy-vte"
-version = "0.1.0"
+version.workspace = true
 edition = "2024"
 description = "A pure-Rust, lock-free, async-first ANSI terminal emulator widget for GTK4"
 license = "Apache-2.0"

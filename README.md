@@ -10,18 +10,12 @@ Boxxy is a full terminal emulator with an agentic AI layer — **BoxxyClaw** —
 
 ## Install
 
-<details open>
-<summary><b>Native</b> · <sub>Requires GTK 4.24+</sub></summary>
-
+**Native** *(Requires GTK 4.24+)*
 ```bash
 curl -sSf https://raw.githubusercontent.com/boxxy-dev/boxxy/main/scripts/install.sh | sh
 ```
 
-</details>
-
-<details>
-<summary><b>Flatpak</b> · <sub>Sandboxed desktop package</sub></summary>
-
+**Flatpak**
 ```bash
 curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
   flatpak remote-add --user --if-not-exists --gpg-import=boxxy.gpg \
@@ -29,18 +23,11 @@ curl -O https://boxxy-dev.github.io/boxxy-flatpak-remote/boxxy.gpg && \
   flatpak install --user boxxy dev.boxxy.BoxxyTerminal
 ```
 
-</details>
-
-<details>
-<summary><b>NixOS</b> · <sub>Nix Flake</sub></summary>
-
+**NixOS** *(Nix Flake)*
 ```bash
 nix profile install github:boxxy-dev/boxxy
 ```
-
-Try without installing: `nix run github:boxxy-dev/boxxy` · Flake input: `github:boxxy-dev/boxxy`
-
-</details>
+<sub>Try without installing: <code>nix run github:boxxy-dev/boxxy</code> · Flake input: <code>github:boxxy-dev/boxxy</code></sub>
 
 <sub>Desktop panel companions: <a href="https://github.com/boxxy-dev/gnome-shell-boxxy-companion">GNOME Shell Extension ↗</a> · <a href="https://github.com/boxxy-dev/cosmic-boxxy-companion">COSMIC Desktop Applet ↗</a></sub>
 

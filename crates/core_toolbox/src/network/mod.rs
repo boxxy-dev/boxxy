@@ -89,7 +89,7 @@ static HTTP_CLIENT: LazyLock<reqwest::Client> = LazyLock::new(|| {
     });
 
     reqwest::Client::builder()
-        .user_agent("Boxxy-Claw/0.1.0")
+        .user_agent(concat!("Boxxy-Claw/", env!("CARGO_PKG_VERSION")))
         .connect_timeout(Duration::from_secs(5))
         .timeout(Duration::from_secs(10))
         .redirect(redirect_policy)
