@@ -271,6 +271,85 @@ pub fn builtin_app_themes() -> Vec<AppThemeDefinition> {
     ]
 }
 
+/// Curated surface preview and `(secondary, highlight)` identity constants for Legacy Adwaita
+/// (`AppThemeMode::DefaultGtk`).
+///
+/// Primary `@accent_*` is intentionally left untouched so Libadwaita follows the live OS
+/// system accent color (`AdwStyleManager:accent-color`). `secondary` uses Iris Lavender
+/// (`#a594f9`) so it remains distinct from Adwaita's default Blue accent (`#3584e4` / `#78aeed`)
+/// as well as semantic Green/Yellow/Red status colors, paired with Warm Solar Amber (`#f5b971`)
+/// in dark mode and Tangerine Gold (`#ff9f43`) in light mode.
+pub const ADWAITA_DARK_WINDOW_BG: &str = "#222226";
+pub const ADWAITA_DARK_SECONDARY: &str = "#a594f9";
+pub const ADWAITA_DARK_SECONDARY_FG: &str = "#111418";
+pub const ADWAITA_DARK_HIGHLIGHT: &str = "#f5b971";
+pub const ADWAITA_DARK_HIGHLIGHT_FG: &str = "#201407";
+
+pub const ADWAITA_LIGHT_WINDOW_BG: &str = "#fafafb";
+pub const ADWAITA_LIGHT_SECONDARY: &str = "#a594f9";
+pub const ADWAITA_LIGHT_SECONDARY_FG: &str = "#111418";
+pub const ADWAITA_LIGHT_HIGHLIGHT: &str = "#ff9f43";
+pub const ADWAITA_LIGHT_HIGHLIGHT_FG: &str = "#111418";
+
+/// Returns `(secondary, secondary_fg, highlight, highlight_fg)` for Legacy Adwaita dark or light mode.
+#[must_use]
+pub const fn adwaita_extra_colors(
+    is_dark: bool,
+) -> (&'static str, &'static str, &'static str, &'static str) {
+    if is_dark {
+        (
+            ADWAITA_DARK_SECONDARY,
+            ADWAITA_DARK_SECONDARY_FG,
+            ADWAITA_DARK_HIGHLIGHT,
+            ADWAITA_DARK_HIGHLIGHT_FG,
+        )
+    } else {
+        (
+            ADWAITA_LIGHT_SECONDARY,
+            ADWAITA_LIGHT_SECONDARY_FG,
+            ADWAITA_LIGHT_HIGHLIGHT,
+            ADWAITA_LIGHT_HIGHLIGHT_FG,
+        )
+    }
+}
+
+/// Computes contrast-clamped `(secondary_color, highlight_color)` for Legacy Adwaita dark or
+/// light surfaces, used for standalone chip text and `GtkTextTag` input highlighting.
+#[must_use]
+pub fn adwaita_readable_secondary_and_highlight(is_dark: bool) -> (String, String) {
+    let (secondary, _, highlight, _) = adwaita_extra_colors(is_dark);
+    (
+        readable_color_on_surface(secondary, is_dark),
+        readable_color_on_surface(highlight, is_dark),
+    )
+}
+
+/// Generates the `@define-color` CSS block supplying Boxxy's `secondary` and `highlight`
+/// tokens in Legacy Adwaita mode (`AppThemeMode::DefaultGtk`).
+///
+/// Leaves all Libadwaita surface tokens, semantic status colors, and OS `@accent_*` variables untouched.
+#[must_use]
+pub fn generate_adwaita_tokens_css(is_dark: bool) -> String {
+    let (secondary, secondary_fg, highlight, highlight_fg) = adwaita_extra_colors(is_dark);
+    let (secondary_readable, highlight_readable) =
+        adwaita_readable_secondary_and_highlight(is_dark);
+
+    format!(
+        r#"
+@define-color boxxy_secondary_bg_color {secondary};
+@define-color boxxy_secondary_fg_color {secondary_fg};
+@define-color boxxy_secondary_color {secondary_readable};
+@define-color boxxy_secondary_subtle alpha(@boxxy_secondary_bg_color, 0.16);
+@define-color boxxy_highlight_bg_color {highlight};
+@define-color boxxy_highlight_fg_color {highlight_fg};
+@define-color boxxy_highlight_color {highlight_readable};
+@define-color boxxy_highlight_subtle alpha(@boxxy_highlight_bg_color, 0.22);
+@define-color boxxy_search_match_bg alpha(@boxxy_highlight_bg_color, 0.32);
+@define-color boxxy_search_match_fg @card_fg_color;
+"#
+    )
+}
+
 /// Generates the Layer 4 custom accent color override CSS block.
 ///
 /// Intentionally overrides only `@accent_*` tokens so a user's personal accent choice

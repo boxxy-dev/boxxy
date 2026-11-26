@@ -87,6 +87,11 @@ impl ColorDot {
     pub fn set_hex(&self, hex: &str) {
         let safe = sanitize_hex_color(hex).unwrap_or_else(|| "#808080".to_string());
         let rgba = gdk::RGBA::parse(&safe).unwrap_or_else(|_| gdk::RGBA::new(0.5, 0.5, 0.5, 1.0));
+        self.set_rgba(rgba);
+    }
+
+    pub fn set_rgba(&self, mut rgba: gdk::RGBA) {
+        rgba.set_alpha(1.0);
         self.imp().color.set(rgba);
         self.queue_draw();
     }

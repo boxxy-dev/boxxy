@@ -5,8 +5,12 @@ pub mod oklch;
 
 pub use cascade::{active_mention_colors, apply_app_theme};
 pub use colors::{
-    ACCENT_PRESETS, AppThemeColors, AppThemeDefinition, builtin_app_themes,
-    generate_accent_override_css,
+    ACCENT_PRESETS, ADWAITA_DARK_HIGHLIGHT, ADWAITA_DARK_HIGHLIGHT_FG, ADWAITA_DARK_SECONDARY,
+    ADWAITA_DARK_SECONDARY_FG, ADWAITA_DARK_WINDOW_BG, ADWAITA_LIGHT_HIGHLIGHT,
+    ADWAITA_LIGHT_HIGHLIGHT_FG, ADWAITA_LIGHT_SECONDARY, ADWAITA_LIGHT_SECONDARY_FG,
+    ADWAITA_LIGHT_WINDOW_BG, AppThemeColors, AppThemeDefinition, adwaita_extra_colors,
+    adwaita_readable_secondary_and_highlight, builtin_app_themes, generate_accent_override_css,
+    generate_adwaita_tokens_css,
 };
 pub use community::{
     discover_community_themes, discover_community_themes_in, ensure_app_themes_dir,
@@ -195,6 +199,41 @@ highlight = "#fcbf49"
     }
 
     #[test]
+    fn test_adwaita_tokens_css_preserves_system_accent_and_clamps_contrast() {
+        for (is_dark, expected_hi) in [
+            (true, ADWAITA_DARK_HIGHLIGHT),
+            (false, ADWAITA_LIGHT_HIGHLIGHT),
+        ] {
+            let css = generate_adwaita_tokens_css(is_dark);
+            assert!(css.contains(&format!(
+                "@define-color boxxy_secondary_bg_color {ADWAITA_DARK_SECONDARY};"
+            )));
+            assert!(css.contains(&format!(
+                "@define-color boxxy_highlight_bg_color {expected_hi};"
+            )));
+            assert!(css.contains(
+                "@define-color boxxy_search_match_bg alpha(@boxxy_highlight_bg_color, 0.32);"
+            ));
+            // Must never override native OS accent or Adwaita surface variables
+            assert!(!css.contains("accent_color"));
+            assert!(!css.contains("accent_bg_color"));
+            assert!(!css.contains("window_bg_color"));
+            assert!(!css.contains("card_bg_color"));
+
+            let (sec_readable, hi_readable) = adwaita_readable_secondary_and_highlight(is_dark);
+            let l_sec = hex_to_oklch(&sec_readable).unwrap().l;
+            let l_hi = hex_to_oklch(&hi_readable).unwrap().l;
+            if is_dark {
+                assert!(l_sec >= 0.73, "expected dark secondary L >= 0.73, got {l_sec}");
+                assert!(l_hi >= 0.73, "expected dark highlight L >= 0.73, got {l_hi}");
+            } else {
+                assert!(l_sec <= 0.53, "expected light secondary L <= 0.53, got {l_sec}");
+                assert!(l_hi <= 0.53, "expected light highlight L <= 0.53, got {l_hi}");
+            }
+        }
+    }
+
+    #[test]
     fn test_accent_override_css_generation() {
         let css = generate_accent_override_css("#00acc1").expect("valid hex");
         assert!(css.contains("@define-color accent_color #00acc1;"));
@@ -300,6 +339,18 @@ highlight = "#fcbf49"
                     .push(format!("tokens({id}):{line}: {err}"));
             });
             provider.load_from_string(&theme.colors.to_gtk_css(theme.is_dark));
+        }
+
+        for (label, is_dark) in [("adwaita-dark", true), ("adwaita-light", false)] {
+            let provider = gtk::CssProvider::new();
+            let err_sink = errors.clone();
+            provider.connect_parsing_error(move |_prov, section, err| {
+                let line = section.start_location().lines() + 1;
+                err_sink
+                    .borrow_mut()
+                    .push(format!("tokens({label}):{line}: {err}"));
+            });
+            provider.load_from_string(&generate_adwaita_tokens_css(is_dark));
         }
 
         let collected = errors.borrow();

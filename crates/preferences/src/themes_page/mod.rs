@@ -5,8 +5,10 @@ use crate::ui_utils::{
 use adw::prelude::*;
 use boxxy_themes::ColorDot;
 use boxxy_themes::app_theme::{
-    ACCENT_PRESETS, AppThemeDefinition, builtin_app_themes, discover_community_themes,
-    ensure_app_themes_dir, resolve_app_theme,
+    ACCENT_PRESETS, ADWAITA_DARK_HIGHLIGHT, ADWAITA_DARK_SECONDARY, ADWAITA_DARK_WINDOW_BG,
+    ADWAITA_LIGHT_HIGHLIGHT, ADWAITA_LIGHT_SECONDARY, ADWAITA_LIGHT_WINDOW_BG, AppThemeDefinition,
+    adwaita_extra_colors, builtin_app_themes, discover_community_themes, ensure_app_themes_dir,
+    resolve_app_theme,
 };
 use gtk4 as gtk;
 use gtk4::glib;
@@ -46,7 +48,7 @@ fn build_theme_action_row(
     dots: &[&str; 4],
     is_selected: bool,
     on_activate: impl Fn() + 'static,
-) -> (adw::ActionRow, gtk::Image) {
+) -> (adw::ActionRow, gtk::Image, [ColorDot; 4]) {
     let row = adw::ActionRow::new();
     row.set_title(&glib::markup_escape_text(title));
     row.set_subtitle(&glib::markup_escape_text(subtitle));
@@ -65,9 +67,11 @@ fn build_theme_action_row(
     let dots_box = gtk::Box::new(gtk::Orientation::Horizontal, 3);
     dots_box.set_valign(gtk::Align::Center);
     dots_box.set_margin_start(4);
-    for dot_hex in dots {
-        dots_box.append(&ColorDot::new(dot_hex, 14));
-    }
+    let dot_widgets = std::array::from_fn(|idx| {
+        let dot = ColorDot::new(dots[idx], 14);
+        dots_box.append(&dot);
+        dot
+    });
     suffix_box.append(&dots_box);
 
     let check_img = gtk::Image::from_icon_name("boxxy-object-select-symbolic");
@@ -81,7 +85,7 @@ fn build_theme_action_row(
         on_activate();
     });
 
-    (row, check_img)
+    (row, check_img, dot_widgets)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -107,7 +111,7 @@ pub(crate) fn setup_themes_page(builder: &gtk::Builder) -> PageHooks {
         let theme_id = theme.id.clone();
         let refresh_ui = refresh_selection_ui.clone();
 
-        let (row, check_img) = build_theme_action_row(
+        let (row, check_img, _) = build_theme_action_row(
             &theme.name,
             &theme.description,
             &theme.tags,
@@ -239,31 +243,47 @@ pub(crate) fn setup_themes_page(builder: &gtk::Builder) -> PageHooks {
             "System Follow",
             "Follow your operating system's dark or light GTK preference.",
             vec!["system".to_string(), "adwaita".to_string()],
-            ["#242424", "#3584e4", "#62a0ea", "#e5a50a"],
+            [
+                ADWAITA_DARK_WINDOW_BG,
+                "#3584e4",
+                ADWAITA_DARK_SECONDARY,
+                ADWAITA_DARK_HIGHLIGHT,
+            ],
             ColorScheme::Default,
         ),
         (
             "System Dark",
             "Standard Libadwaita dark appearance.",
             vec!["dark".to_string(), "adwaita".to_string()],
-            ["#1e1e1e", "#3584e4", "#62a0ea", "#f8e45c"],
+            [
+                ADWAITA_DARK_WINDOW_BG,
+                "#3584e4",
+                ADWAITA_DARK_SECONDARY,
+                ADWAITA_DARK_HIGHLIGHT,
+            ],
             ColorScheme::Dark,
         ),
         (
             "System Light",
             "Standard Libadwaita light appearance.",
             vec!["light".to_string(), "adwaita".to_string()],
-            ["#fafafa", "#3584e4", "#1c71d8", "#e5a50a"],
+            [
+                ADWAITA_LIGHT_WINDOW_BG,
+                "#3584e4",
+                ADWAITA_LIGHT_SECONDARY,
+                ADWAITA_LIGHT_HIGHLIGHT,
+            ],
             ColorScheme::Light,
         ),
     ];
 
+    let mut legacy_dot_sets = Vec::with_capacity(legacy_specs.len());
     for (title, subtitle, tags, dots, scheme) in legacy_specs {
         let is_selected =
             initial.app_theme_mode == AppThemeMode::DefaultGtk && initial.color_scheme == scheme;
         let refresh_ui = refresh_selection_ui.clone();
 
-        let (row, check_img) = build_theme_action_row(
+        let (row, check_img, dot_widgets) = build_theme_action_row(
             title,
             subtitle,
             &tags,
@@ -284,8 +304,51 @@ pub(crate) fn setup_themes_page(builder: &gtk::Builder) -> PageHooks {
         static_rows
             .borrow_mut()
             .push((ThemeRowAction::LegacyAdwaita(scheme), check_img));
+        legacy_dot_sets.push((scheme, dot_widgets));
     }
     page.add(&legacy_group);
+
+    // Keep Legacy Adwaita preview swatches synced with the live OS accent color and dark/light state
+    {
+        let style_manager = adw::StyleManager::default();
+        let sync_legacy_dots: Rc<dyn Fn(&adw::StyleManager)> = Rc::new(move |sm| {
+            let accent_rgba = sm.accent_color_rgba();
+            let sys_dark = sm.is_dark();
+            for (scheme, dots) in &legacy_dot_sets {
+                let row_dark = match scheme {
+                    ColorScheme::Dark => true,
+                    ColorScheme::Light => false,
+                    ColorScheme::Default => sys_dark,
+                };
+                dots[0].set_hex(if row_dark {
+                    ADWAITA_DARK_WINDOW_BG
+                } else {
+                    ADWAITA_LIGHT_WINDOW_BG
+                });
+                dots[1].set_rgba(accent_rgba);
+                let (secondary, _, highlight, _) = adwaita_extra_colors(row_dark);
+                dots[2].set_hex(secondary);
+                dots[3].set_hex(highlight);
+            }
+        });
+        sync_legacy_dots(&style_manager);
+
+        let sync_for_accent = sync_legacy_dots.clone();
+        let accent_handler = style_manager.connect_accent_color_rgba_notify(move |sm| {
+            sync_for_accent(sm);
+        });
+        let dark_handler = style_manager.connect_dark_notify(move |sm| {
+            sync_legacy_dots(sm);
+        });
+        let handlers = RefCell::new(Some((accent_handler, dark_handler)));
+        page.connect_destroy(move |_| {
+            if let Some((accent_id, dark_id)) = handlers.borrow_mut().take() {
+                let sm = adw::StyleManager::default();
+                sm.disconnect(accent_id);
+                sm.disconnect(dark_id);
+            }
+        });
+    }
 
     let community_rows: Rc<RefCell<Vec<(String, adw::ActionRow, gtk::Image)>>> =
         Rc::new(RefCell::new(Vec::new()));
@@ -324,7 +387,9 @@ pub(crate) fn setup_themes_page(builder: &gtk::Builder) -> PageHooks {
             update_custom_picker_color(effective_accent);
 
             if !is_boxxy {
-                accent_row.set_subtitle("Select a Boxxy or Community theme to customize accent");
+                accent_row.set_subtitle(
+                    "Adwaita follows your system accent color; select a Boxxy or Community theme to override",
+                );
                 reset_accent_btn.set_sensitive(false);
             } else if let Some(ref custom_hex) = s.custom_accent_color {
                 accent_row
@@ -407,7 +472,7 @@ pub(crate) fn setup_themes_page(builder: &gtk::Builder) -> PageHooks {
                     let theme_id = theme.id.clone();
                     let update_ui = update_ui.clone();
 
-                    let (row, check_img) = build_theme_action_row(
+                    let (row, check_img, _) = build_theme_action_row(
                         &theme.name,
                         &subtitle,
                         &theme.tags,

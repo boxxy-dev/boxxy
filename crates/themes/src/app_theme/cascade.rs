@@ -1,18 +1,16 @@
-use super::colors::generate_accent_override_css;
+use super::colors::{
+    adwaita_readable_secondary_and_highlight, generate_accent_override_css,
+    generate_adwaita_tokens_css,
+};
 use super::community::resolve_app_theme;
 use super::oklch::is_hex_dark;
 use gtk4 as gtk;
 use libadwaita as adw;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 const PRIORITY_BOXXY_SKELETON: u32 = gtk::STYLE_PROVIDER_PRIORITY_USER;
 const PRIORITY_BOXXY_TOKENS: u32 = gtk::STYLE_PROVIDER_PRIORITY_USER + 10;
 const PRIORITY_BOXXY_ACCENT: u32 = gtk::STYLE_PROVIDER_PRIORITY_USER + 20;
-
-/// Default Adwaita token colors for `@file` and `:character` input highlighting when
-/// running in `AppThemeMode::DefaultGtk` (or before `apply_app_theme` is called).
-const ADWAITA_FILE_MENTION_HEX: &str = "#62a0ea";
-const ADWAITA_CHAR_MENTION_HEX: &str = "#c061cb";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct AppliedThemeState {
@@ -28,33 +26,30 @@ thread_local! {
     static TOKENS_PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
     static ACCENT_PROVIDER: RefCell<Option<gtk::CssProvider>> = const { RefCell::new(None) };
     static LAST_APPLIED_STATE: RefCell<Option<AppliedThemeState>> = const { RefCell::new(None) };
+    static DARK_NOTIFY_INSTALLED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Returns contrast-clamped `(file_mention_hex, char_mention_hex)` for non-CSS consumers
 /// such as `GtkTextTag` syntax highlighting in the Claw input bar.
 ///
-/// - When `AppThemeMode::Boxxy` is active: returns `(secondary_color, highlight_color)`
-///   clamped against `card_bg` luminance.
-/// - When `AppThemeMode::DefaultGtk` is active: returns stock Adwaita blue/purple.
+/// Returns the active theme's `(secondary_color, highlight_color)` in both `AppThemeMode::Boxxy`
+/// and `AppThemeMode::DefaultGtk` (Legacy Adwaita).
 #[must_use]
 pub fn active_mention_colors() -> (String, String) {
     LAST_APPLIED_STATE.with(|cell| {
-        if let Some(state) = cell.borrow().as_ref()
-            && state.use_boxxy_theme
-        {
+        if let Some(state) = cell.borrow().as_ref() {
             return state.mention_colors.clone();
         }
-        (
-            ADWAITA_FILE_MENTION_HEX.to_string(),
-            ADWAITA_CHAR_MENTION_HEX.to_string(),
-        )
+        adwaita_readable_secondary_and_highlight(true)
     })
 }
 
 /// Applies or unloads the custom Boxxy App Theme cascade and updates `adw::StyleManager`.
 ///
-/// - When `use_boxxy_theme` is `false` (Default GTK mode), all custom Boxxy theme providers
-///   are removed from the display and `fallback_scheme` is applied to `adw::StyleManager`.
+/// - When `use_boxxy_theme` is `false` (Default GTK / Legacy Adwaita mode), unloads the Boxxy
+///   skeleton and custom accent providers (so geometry stays native Adwaita and `@accent_*`
+///   follows the OS system accent color), applies `fallback_scheme`, and loads Adwaita's
+///   dark/light `secondary` and `highlight` token definitions into Layer 3 (`TOKENS_PROVIDER`).
 /// - When `use_boxxy_theme` is `true`, loads `boxxy_skeleton.css` (Layer 2), the theme's
 ///   color tokens (Layer 3), and the optional custom accent override (Layer 4), while
 ///   forcing `adw::ColorScheme::ForceDark` or `ForceLight` to match the theme.
@@ -67,30 +62,42 @@ pub fn apply_app_theme(
     fallback_scheme: adw::ColorScheme,
 ) {
     let style_manager = adw::StyleManager::default();
+    ensure_dark_notify_listener(&style_manager);
 
     if !use_boxxy_theme {
+        if style_manager.color_scheme() != fallback_scheme {
+            style_manager.set_color_scheme(fallback_scheme);
+        }
+        let is_dark = style_manager.is_dark();
+        let tokens_css = generate_adwaita_tokens_css(is_dark);
+        let mention_colors = adwaita_readable_secondary_and_highlight(is_dark);
+
         let target_state = AppliedThemeState {
             use_boxxy_theme: false,
-            tokens_css: String::new(),
+            tokens_css: tokens_css.clone(),
             accent_css: None,
             color_scheme: fallback_scheme,
-            mention_colors: (
-                ADWAITA_FILE_MENTION_HEX.to_string(),
-                ADWAITA_CHAR_MENTION_HEX.to_string(),
-            ),
+            mention_colors,
         };
         let already_applied =
             LAST_APPLIED_STATE.with(|cell| cell.borrow().as_ref() == Some(&target_state));
         if already_applied {
             return;
         }
+
         remove_provider(&SKELETON_PROVIDER);
-        remove_provider(&TOKENS_PROVIDER);
         remove_provider(&ACCENT_PROVIDER);
-        if style_manager.color_scheme() != fallback_scheme {
-            style_manager.set_color_scheme(fallback_scheme);
+
+        let tokens_changed = LAST_APPLIED_STATE.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .is_none_or(|prev| prev.tokens_css != tokens_css)
+        });
+        if tokens_changed {
+            set_string_provider(&TOKENS_PROVIDER, &tokens_css, PRIORITY_BOXXY_TOKENS);
         }
-        set_display_card_dark(style_manager.is_dark());
+
+        set_display_card_dark(is_dark);
         LAST_APPLIED_STATE.with(|cell| *cell.borrow_mut() = Some(target_state));
         return;
     }
@@ -131,7 +138,7 @@ pub fn apply_app_theme(
     let tokens_changed = LAST_APPLIED_STATE.with(|cell| {
         cell.borrow()
             .as_ref()
-            .is_none_or(|prev| !prev.use_boxxy_theme || prev.tokens_css != tokens_css)
+            .is_none_or(|prev| prev.tokens_css != tokens_css)
     });
     if tokens_changed {
         set_string_provider(&TOKENS_PROVIDER, &tokens_css, PRIORITY_BOXXY_TOKENS);
@@ -152,6 +159,48 @@ pub fn apply_app_theme(
     }
 
     LAST_APPLIED_STATE.with(|cell| *cell.borrow_mut() = Some(target_state));
+}
+
+/// Keeps Legacy Adwaita's `secondary` and `highlight` CSS tokens and `"boxxy-card-is-dark"`
+/// display property synchronized when the OS switches dark/light under `System Follow`.
+fn ensure_dark_notify_listener(style_manager: &adw::StyleManager) {
+    let already_installed = DARK_NOTIFY_INSTALLED.with(|installed| installed.replace(true));
+    if already_installed {
+        return;
+    }
+
+    style_manager.connect_dark_notify(|sm| {
+        let should_sync_adwaita = LAST_APPLIED_STATE.with(|cell| {
+            cell.borrow()
+                .as_ref()
+                .is_some_and(|state| !state.use_boxxy_theme)
+        });
+        if !should_sync_adwaita {
+            return;
+        }
+
+        let is_dark = sm.is_dark();
+        let tokens_css = generate_adwaita_tokens_css(is_dark);
+        let mention_colors = adwaita_readable_secondary_and_highlight(is_dark);
+
+        let changed = LAST_APPLIED_STATE.with(|cell| {
+            let mut guard = cell.borrow_mut();
+            let Some(state) = guard.as_mut() else {
+                return false;
+            };
+            if state.tokens_css == tokens_css && state.mention_colors == mention_colors {
+                return false;
+            }
+            state.tokens_css.clone_from(&tokens_css);
+            state.mention_colors = mention_colors;
+            true
+        });
+
+        if changed {
+            set_string_provider(&TOKENS_PROVIDER, &tokens_css, PRIORITY_BOXXY_TOKENS);
+            set_display_card_dark(is_dark);
+        }
+    });
 }
 
 fn set_display_card_dark(is_card_dark: bool) {

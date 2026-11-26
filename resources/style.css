@@ -1,20 +1,20 @@
-/* Layer 1 Semantic Fallback Tokens (overridden by Layer 3 when AppThemeMode::Boxxy is active;
-   ensures Legacy Adwaita mode stays 100% native and valid) */
+/* Layer 1 Semantic Fallback Tokens (overridden by Layer 3 for dark/light Boxxy and Adwaita;
+   primary @accent_* remains bound to AdwStyleManager's OS system accent color in Adwaita) */
 @define-color boxxy_ink alpha(currentColor, 0.28);
 @define-color boxxy_shadow rgba(0, 0, 0, 0.35);
 @define-color boxxy_surface_hover mix(@card_bg_color, @accent_bg_color, 0.82);
 
-@define-color boxxy_secondary_bg_color @accent_bg_color;
-@define-color boxxy_secondary_fg_color @accent_fg_color;
-@define-color boxxy_secondary_color @accent_color;
-@define-color boxxy_secondary_subtle alpha(@accent_bg_color, 0.16);
+@define-color boxxy_secondary_bg_color #a594f9;
+@define-color boxxy_secondary_fg_color #111418;
+@define-color boxxy_secondary_color #b2a3fb;
+@define-color boxxy_secondary_subtle alpha(@boxxy_secondary_bg_color, 0.16);
 
-@define-color boxxy_highlight_bg_color @warning_bg_color;
-@define-color boxxy_highlight_fg_color @warning_fg_color;
-@define-color boxxy_highlight_color @warning_color;
-@define-color boxxy_highlight_subtle alpha(@warning_bg_color, 0.20);
-@define-color boxxy_search_match_bg alpha(@warning_bg_color, 0.30);
-@define-color boxxy_search_match_fg currentColor;
+@define-color boxxy_highlight_bg_color #f5b971;
+@define-color boxxy_highlight_fg_color #201407;
+@define-color boxxy_highlight_color #f5b971;
+@define-color boxxy_highlight_subtle alpha(@boxxy_highlight_bg_color, 0.22);
+@define-color boxxy_search_match_bg alpha(@boxxy_highlight_bg_color, 0.32);
+@define-color boxxy_search_match_fg @card_fg_color;
 
 tabbar tab .tab-title label,
 tabbar tab label,
@@ -179,7 +179,7 @@ label.dev-mode-tag {
     border-radius: 6px;
     font-size: 0.78em;
     font-weight: 800;
-    background-color: @boxxy_highlight_subtle;
+    background-color: alpha(@warning_bg_color, 0.20);
     color: @warning_color;
     border: 1px solid alpha(@warning_color, 0.45);
 }
