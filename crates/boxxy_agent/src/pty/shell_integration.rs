@@ -73,7 +73,9 @@ if [[ -z "${BOXXY_SHELL_INTEGRATION_LOADED:-}" ]]; then
         builtin local ret=$?
         __boxxy_precmd "$ret"
         if [[ "${PS0:-}" != *"$__boxxy_ps0"* ]]; then
-            PS0="${PS0:-}${__boxxy_ps0}"
+            # Prepend, never append: other integrations (e.g. VTE's vte.sh) end PS0 with a
+            # decoded backslash that would escape our leading '$' and print the hook verbatim.
+            PS0="${__boxxy_ps0}${PS0:-}"
         fi
         return "$ret"
     }
@@ -545,5 +547,106 @@ mod tests {
         apply_shell_integration(&mut script_argv, &mut script_env, tmp.path());
         assert_eq!(script_argv, vec!["/bin/bash", "script.sh", "arg1"]);
         assert!(script_env.is_empty());
+    }
+
+    /// Regression test for a leaked `__boxxy_preexec` prompt fragment. Other integrations
+    /// (e.g. VTE's `/etc/profile.d/vte-2.91.sh`) leave `PS0` ending in a decoded backslash;
+    /// appending the hook right after that escaped its leading `$`, so bash printed the
+    /// construct verbatim instead of running it and never emitted `OSC 133;C`.
+    #[tokio::test]
+    async fn bash_ps0_hook_runs_after_backslash_terminated_preexisting_ps0() {
+        use nix::fcntl::OFlag;
+        use nix::pty::{grantpt, posix_openpt, ptsname_r, unlockpt};
+        use nix::sys::stat::Mode;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        if !Path::new("/bin/bash").exists() {
+            return;
+        }
+
+        // Mirrors vte.sh's PS0 tail: an OSC terminated by ST, i.e. a decoded trailing backslash.
+        const PREEXISTING_PS0: &str = r"\e]666;boxxy-probe\e\\";
+        const OUTPUT_MARKER: &str = "BOX_BASH_PS0_PROBE";
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        ensure_integration_scripts_in(tmp.path()).expect("write scripts");
+        let rc = tmp.path().join("bash").join("boxxy-bash.sh");
+        let home = tmp.path().join("home");
+        fs::create_dir_all(&home).expect("create synthetic home");
+
+        let master = posix_openpt(
+            OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_NONBLOCK | OFlag::O_CLOEXEC,
+        )
+        .expect("posix_openpt");
+        grantpt(&master).expect("grantpt");
+        unlockpt(&master).expect("unlockpt");
+        let slave_path = ptsname_r(&master).expect("ptsname_r");
+        let slave = nix::fcntl::open(
+            Path::new(&slave_path),
+            OFlag::O_RDWR | OFlag::O_NOCTTY | OFlag::O_CLOEXEC,
+            Mode::empty(),
+        )
+        .expect("open slave pty");
+
+        let mut child = Command::new("/bin/bash")
+            .arg("--noprofile")
+            .arg("--rcfile")
+            .arg(&rc)
+            .arg("-i")
+            .env("HOME", &home)
+            .env("PATH", "/usr/bin:/bin")
+            .env("TERM", "dumb")
+            .env("PS0", PREEXISTING_PS0)
+            .stdin(Stdio::from(slave.try_clone().expect("clone slave fd")))
+            .stdout(Stdio::from(slave.try_clone().expect("clone slave fd")))
+            .stderr(Stdio::from(slave))
+            .spawn()
+            .expect("spawn interactive bash");
+
+        let started = Instant::now();
+        let mut out = Vec::new();
+        let mut buf = [0u8; 8192];
+        let mut command_sent = false;
+        while started.elapsed() < Duration::from_secs(20) {
+            // Send the probe command once the shell has started emitting prompt bytes, so the
+            // PTY input queue is never flushed by bash's own startup before it is read.
+            if !command_sent && (!out.is_empty() || started.elapsed() > Duration::from_millis(1500)) {
+                nix::unistd::write(&master, format!("echo {OUTPUT_MARKER}\n").as_bytes())
+                    .expect("write probe command");
+                command_sent = true;
+            }
+            match nix::unistd::read(&master, &mut buf) {
+                Ok(0) => break,
+                Ok(n) => {
+                    out.extend_from_slice(&buf[..n]);
+                    let text = String::from_utf8_lossy(&out);
+                    if text.contains(OUTPUT_MARKER) && text.contains("\u{1b}]133;C") {
+                        break;
+                    }
+                }
+                Err(nix::errno::Errno::EAGAIN) => {
+                    tokio::time::sleep(Duration::from_millis(10)).await;
+                }
+                Err(nix::errno::Errno::EIO) => break,
+                Err(err) => panic!("pty read failed: {err}"),
+            }
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+
+        let text = String::from_utf8_lossy(&out);
+        assert!(
+            !text.contains("__boxxy_preexec"),
+            "the PS0 hook was printed literally instead of running: {text:?}"
+        );
+        assert!(
+            text.contains("\u{1b}]133;C"),
+            "OSC 133;C missing, __boxxy_preexec never ran: {text:?}"
+        );
+        assert!(
+            text.contains(OUTPUT_MARKER),
+            "the probe command output was never captured: {text:?}"
+        );
     }
 }
