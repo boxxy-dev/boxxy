@@ -7,9 +7,30 @@ use super::context::RunContext;
 
 impl ClawSession {
     pub(super) async fn handle_abort(&self, ctx: &mut RunContext) {
-        if let Some(handle) = ctx.current_turn.take() {
-            handle.abort();
-            let (thinking_name, thinking_cid) = self.state.lock().await.effective_speaker();
+        let thinking_stop = {
+            let mut state_lock = self.state.lock().await;
+            // Salvage completed mid-turn tool steps BEFORE calling `handle.abort()` so
+            // `InFlightClearGuard::drop()` on multi-threaded Tokio workers never clears
+            // `in_flight_snapshot.messages` ahead of salvage.
+            let _ = state_lock.salvage_in_flight_tool_steps();
+            state_lock.current_turn_user_images.clear();
+            state_lock.generated_images_this_turn.clear();
+            let spk = state_lock.effective_speaker();
+            let had_turn = ctx.current_turn.take().is_some_and(|handle| {
+                handle.abort();
+                true
+            });
+            state_lock.last_turn_paused_queue = false;
+            state_lock.status = crate::engine::AgentStatus::Waiting;
+            state_lock.active_speaker = None;
+            state_lock.next_roundtable_turn = None;
+            state_lock.roundtable.pause_for_interjection();
+            state_lock.drain_pending_cancel();
+            drop(state_lock);
+            had_turn.then_some(spk)
+        };
+
+        if let Some((thinking_name, thinking_cid)) = thinking_stop {
             let _ = self
                 .tx_ui
                 .send(ClawEngineEvent::AgentThinking {
@@ -25,16 +46,6 @@ impl ClawSession {
             self.emit_queue_updated(ctx).await;
         }
 
-        {
-            let mut state_lock = self.state.lock().await;
-            let _ = state_lock.salvage_in_flight_tool_steps();
-            state_lock.last_turn_paused_queue = false;
-            state_lock.status = crate::engine::AgentStatus::Waiting;
-            state_lock.active_speaker = None;
-            state_lock.next_roundtable_turn = None;
-            state_lock.roundtable.pause_for_interjection();
-            state_lock.drain_pending_cancel();
-        }
         self.persist_history_if_present().await;
         let _ = ctx
             .workspace

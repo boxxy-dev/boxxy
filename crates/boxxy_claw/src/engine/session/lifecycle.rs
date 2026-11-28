@@ -48,7 +48,7 @@ impl ClawSession {
         if self.incognito {
             return;
         }
-        let unflushed: Vec<Message> = {
+        let (unflushed, api_keys_lock, ollama_url_lock) = {
             let mut state_lock = self.state.lock().await;
             if state_lock.is_headless {
                 return;
@@ -60,7 +60,11 @@ impl ClawSession {
                 .cloned()
                 .collect();
             state_lock.flushed_watermark = state_lock.history.len();
-            items
+            (
+                items,
+                state_lock.api_keys.clone(),
+                state_lock.ollama_url.clone(),
+            )
         };
 
         if unflushed.is_empty() {
@@ -78,11 +82,13 @@ impl ClawSession {
         let db_cell = std::sync::Arc::new(tokio::sync::Mutex::new(Some(db_val)));
         let settings = boxxy_preferences::Settings::load();
         let model = settings.effective_memory_model();
-        let creds = boxxy_ai_core::AiCredentials::new(
-            settings.get_effective_api_keys(),
-            settings.ollama_base_url.clone(),
-        )
-        .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
+        let ipc_keys = api_keys_lock.read().await.clone();
+        let ipc_ollama = ollama_url_lock.read().await.clone();
+        let creds = crate::engine::agent_config::merge_session_credentials(
+            &settings,
+            &ipc_keys,
+            &ipc_ollama,
+        );
         let cwd_owned = if cwd.is_empty() {
             "global".to_string()
         } else {
@@ -225,6 +231,7 @@ impl ClawSession {
         ) {
             Ok(crate::engine::fsm::router::FsmAction::AbortCurrentTurn) => {
                 if let Some(handle) = current_turn.take() {
+                    let _ = state_lock.salvage_in_flight_tool_steps();
                     handle.abort();
 
                     // Notify UI that thinking has stopped
@@ -267,6 +274,8 @@ impl ClawSession {
             let character_id = self.character_id.clone();
             let sleep_timestamp = state_lock.sleep_timestamp.take();
             let sleep_commands = std::mem::take(&mut state_lock.sleep_commands);
+            let api_keys_lock = state_lock.api_keys.clone();
+            let ollama_url_lock = state_lock.ollama_url.clone();
             let tx_self = self.tx_self.clone();
             drop(state_lock);
 
@@ -284,6 +293,8 @@ impl ClawSession {
                 crate::engine::summarization::wake::summarize_wake_delta(
                     sleep_commands,
                     sleep_timestamp,
+                    api_keys_lock,
+                    ollama_url_lock,
                     tx_self,
                 )
                 .await;

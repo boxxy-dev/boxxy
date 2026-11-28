@@ -110,6 +110,8 @@ impl DaemonCore {
             ghost.clone(),
             dream_status.clone(),
             db.clone(),
+            core.state.api_keys.clone(),
+            core.state.ollama_url.clone(),
         );
 
         // MCP background health monitor: warms up configured MCP servers at startup,

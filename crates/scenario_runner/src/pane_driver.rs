@@ -131,6 +131,7 @@ pub struct PaneDriver {
 }
 
 impl PaneDriver {
+    #[allow(clippy::too_many_arguments)]
     pub(crate) async fn spawn(
         pane_id: String,
         session_id: String,
@@ -138,6 +139,7 @@ impl PaneDriver {
         character_name: String,
         cwd: PathBuf,
         env: Arc<dyn ClawEnvironment>,
+        agent_state: &boxxy_agent::core::state::AgentState,
         companions: CompanionTable,
     ) -> Self {
         let (session, tx, rx_ui) = ClawSession::new(pane_id.clone());
@@ -146,6 +148,12 @@ impl PaneDriver {
             character_name.clone(),
             session_id.clone(),
         );
+        {
+            let mut state_lock = session.state.lock().await;
+            state_lock.tracked_pids = agent_state.tracked_pids.clone();
+            state_lock.api_keys = agent_state.api_keys.clone();
+            state_lock.ollama_url = agent_state.ollama_url.clone();
+        }
 
         let workspace = global_workspace().await;
         workspace.register_pane_tx(pane_id.clone(), tx.clone()).await;

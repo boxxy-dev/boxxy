@@ -706,13 +706,12 @@ impl ClawSession {
                     return false;
                 }
 
-                if let Some(handle) = ctx.current_turn.take() {
-                    handle.abort();
-                }
-
                 let (speaker_name, speaker_cid) = {
                     let mut state_lock = self.state.lock().await;
                     let _ = state_lock.salvage_in_flight_tool_steps();
+                    if let Some(handle) = ctx.current_turn.take() {
+                        handle.abort();
+                    }
                     let (spk_name, spk_cid) = state_lock.effective_speaker();
                     let _ = state_lock.pending_terminal_reply.take();
                     state_lock.terminal_command_accepted = false;

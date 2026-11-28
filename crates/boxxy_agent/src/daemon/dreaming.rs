@@ -89,6 +89,8 @@ pub fn spawn_with_status(
     ghost: GhostMode,
     status: DreamStatusCell,
     db: boxxy_db::Db,
+    api_keys: Arc<RwLock<std::collections::HashMap<String, String>>>,
+    ollama_url: Arc<RwLock<String>>,
 ) {
     let status_task = status;
     let handle = tokio::runtime::Handle::current();
@@ -139,7 +141,9 @@ pub fn spawn_with_status(
                     }
 
                     status_task.set(DreamStatus::Running).await;
-                    match run_one_cycle(&db, &settings).await {
+                    let ipc_keys = api_keys.read().await.clone();
+                    let ipc_ollama = ollama_url.read().await.clone();
+                    match run_one_cycle(&db, &settings, &ipc_keys, &ipc_ollama).await {
                         Ok(()) => {
                             consecutive_failures = 0;
                             status_task.set(DreamStatus::Idle).await;
@@ -168,18 +172,16 @@ pub fn spawn_with_status(
 async fn run_one_cycle(
     db: &boxxy_db::Db,
     settings: &boxxy_preferences::Settings,
+    ipc_keys: &std::collections::HashMap<String, String>,
+    ipc_ollama: &str,
 ) -> anyhow::Result<()> {
     // Reuse the daemon's shared SQLite connection pool instead of opening and
     // migrating a brand-new pool on every Dream Cycle.
     let db_arc = Arc::new(Mutex::new(Some(db.clone())));
 
-    // Prefer effective keys (env overrides + settings file merge)
-    // so the daemon's dream cycle works the same way a fresh UI would.
-    let creds = boxxy_ai_core::AiCredentials {
-        api_keys: settings.get_effective_api_keys(),
-        ollama_url: settings.ollama_base_url.clone(),
-        openai_compatible_endpoints: settings.openai_compatible_endpoints.clone(),
-    };
+    // Merge disk/env keys with any non-empty keys pushed to the daemon over IPC (`UpdateCredentials`).
+    let creds =
+        boxxy_claw::engine::agent_config::merge_session_credentials(settings, ipc_keys, ipc_ollama);
 
     let model = settings.effective_memory_model();
 

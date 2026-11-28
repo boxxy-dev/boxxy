@@ -222,6 +222,7 @@ impl TestWorkspace {
             char_info.config.display_name.clone(),
             cwd,
             Arc::clone(&self.env),
+            &self.agent_state,
             self.companions.clone(),
         )
         .await)
@@ -236,6 +237,7 @@ impl TestWorkspace {
             INCOGNITO_DISPLAY_NAME.to_string(),
             self.workspace_dir.path().to_path_buf(),
             Arc::clone(&self.env),
+            &self.agent_state,
             self.companions.clone(),
         )
         .await

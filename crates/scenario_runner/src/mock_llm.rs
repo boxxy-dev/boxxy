@@ -267,6 +267,7 @@ impl MockStep {
 pub struct RecordedChatRequest {
     pub model: String,
     pub stream: bool,
+    pub authorization: Option<String>,
     pub messages: Vec<Value>,
     pub tools: Vec<Value>,
     pub tool_choice: Option<Value>,
@@ -459,11 +460,14 @@ impl Drop for MockLlmServer {
     }
 }
 
-async fn read_http_json_body(stream: &mut TcpStream) -> Result<(String, Value)> {
+async fn read_http_json_body(
+    stream: &mut TcpStream,
+) -> Result<(String, Option<String>, Value)> {
     let mut buf = Vec::with_capacity(16 * 1024);
     let mut chunk = [0_u8; 8192];
     let header_end;
     let mut content_len = 0_usize;
+    let mut authorization = None;
 
     loop {
         let n = stream.read(&mut chunk).await?;
@@ -478,10 +482,13 @@ async fn read_http_json_body(stream: &mut TcpStream) -> Result<(String, Value)> 
             header_end = pos;
             let hdr_str = String::from_utf8_lossy(&buf[..header_end]);
             for line in hdr_str.lines().skip(1) {
-                if let Some((k, v)) = line.split_once(':')
-                    && k.trim().eq_ignore_ascii_case("content-length")
-                {
-                    content_len = v.trim().parse::<usize>().unwrap_or(0);
+                if let Some((k, v)) = line.split_once(':') {
+                    let key = k.trim();
+                    if key.eq_ignore_ascii_case("content-length") {
+                        content_len = v.trim().parse::<usize>().unwrap_or(0);
+                    } else if key.eq_ignore_ascii_case("authorization") {
+                        authorization = Some(v.trim().to_string());
+                    }
                 }
             }
             break;
@@ -509,12 +516,12 @@ async fn read_http_json_body(stream: &mut TcpStream) -> Result<(String, Value)> 
         .to_string();
 
     if content_len == 0 {
-        return Ok((req_line, json!({})));
+        return Ok((req_line, authorization, json!({})));
     }
     let slice_end = target_total.min(buf.len());
     let parsed: Value = serde_json::from_slice(&buf[body_start..slice_end])
         .context("deserialize /v1/chat/completions JSON body")?;
-    Ok((req_line, parsed))
+    Ok((req_line, authorization, parsed))
 }
 
 fn is_aux_request(req: &RecordedChatRequest) -> bool {
@@ -534,7 +541,7 @@ fn is_btw_request(req: &RecordedChatRequest) -> bool {
 }
 
 async fn handle_connection(mut stream: TcpStream, queues: Arc<Mutex<ServerQueues>>) -> Result<()> {
-    let (req_line, body) = read_http_json_body(&mut stream).await?;
+    let (req_line, authorization, body) = read_http_json_body(&mut stream).await?;
 
     // Support `/v1/models` health discovery cleanly if queried.
     if req_line.starts_with("GET ") && req_line.contains("/models") {
@@ -552,6 +559,7 @@ async fn handle_connection(mut stream: TcpStream, queues: Arc<Mutex<ServerQueues
             .unwrap_or_default()
             .to_string(),
         stream: body.get("stream").and_then(Value::as_bool).unwrap_or(false),
+        authorization,
         messages: body
             .get("messages")
             .and_then(Value::as_array)

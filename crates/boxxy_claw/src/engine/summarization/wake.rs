@@ -1,8 +1,10 @@
 const MAX_WAKE_HISTORY_BYTES: usize = 40_000;
 
-pub async fn summarize_wake_delta(
+pub async fn summarize_wake_delta<S: std::hash::BuildHasher + Send + Sync>(
     sleep_commands: Vec<(String, i32)>,
     sleep_timestamp: Option<i64>,
+    api_keys: std::sync::Arc<tokio::sync::RwLock<std::collections::HashMap<String, String, S>>>,
+    ollama_url: std::sync::Arc<tokio::sync::RwLock<String>>,
     tx_self: async_channel::Sender<crate::engine::ClawMessage>,
 ) {
     let _ts = sleep_timestamp.unwrap_or(0);
@@ -25,11 +27,15 @@ pub async fn summarize_wake_delta(
         let settings = boxxy_preferences::Settings::load();
         let model_config = settings.effective_memory_model();
 
-        let creds = boxxy_ai_core::AiCredentials::new(
-            settings.get_effective_api_keys(),
-            settings.ollama_base_url.clone(),
-        )
-        .with_custom_endpoints(settings.openai_compatible_endpoints.clone());
+        let creds = {
+            let ipc_keys = api_keys.read().await;
+            let ipc_ollama = ollama_url.read().await;
+            crate::engine::agent_config::merge_session_credentials(
+                &settings,
+                &ipc_keys,
+                &ipc_ollama,
+            )
+        };
 
         let raw_history = recent_commands.join("\n");
         let truncated_history = truncate_tail_utf8(&raw_history, MAX_WAKE_HISTORY_BYTES);

@@ -11,6 +11,8 @@ pub const UNDO_HISTORY_PREFIX: &str = "[System: The user ran /undo";
 const TRANSCRIPT_CLIP_CHARS: usize = 2_000;
 const TRANSCRIPT_CLIP_SUFFIX: &str =
     "\n...[stale tool output clipped — re-run file_read or grep_search if current contents are needed]";
+const TOOL_IMAGE_CLIP_TEXT: &str =
+    "[stale tool image output clipped outside 4-turn freshness window]";
 const ATTACHMENT_CLIP_SUFFIX: &str = "\n...[stale attachment output clipped]";
 const ROUNDTABLE_HANDOFF_BRIDGE: &str = "[Roundtable handoff]";
 const COMPLETED_TOOL_STEP_BRIDGE: &str = "[Completed tool step]";
@@ -53,40 +55,11 @@ pub(crate) fn extract_interruption_from_tool_result(
     None
 }
 
-/// Extracts a `--- UPDATE CHANGELOG CONTEXT ---` block from `section` (stripping any
-/// trailing `## YOUR IDENTITY` / `## CURRENT TURN CONTEXT` metadata) so recent follow-up
-/// turns inside the 4-turn freshness window retain post-update changelog visibility.
+/// Finds the byte offset of the last top-level `Terminal Snapshot:\n<fence>` header outside
+/// earlier code fences so snapshot extraction and pre-snapshot `@file` / changelog extraction
+/// never match debug markers printed inside terminal output.
 #[must_use]
-fn extract_changelog_block(section: &str) -> Option<String> {
-    let marker = super::WHATS_NEW_CONTEXT_MARKER;
-    let start = section.find(marker)?;
-    let from_marker = &section[start..];
-    let end = from_marker
-        .find("\n\n## YOUR IDENTITY")
-        .or_else(|| from_marker.find("\n\n## CURRENT TURN CONTEXT"))
-        .or_else(|| from_marker.find("\n\nTerminal Snapshot:\n```"))
-        .unwrap_or(from_marker.len());
-    let trimmed = from_marker[..end].trim();
-    (!trimmed.is_empty()).then(|| format!("\n\n{trimmed}"))
-}
-
-/// Extracts a `--- REFERENCED FILES (PRE-LOADED VIA @MENTION) --- ... --- END REFERENCED FILES ---`
-/// block from `section` so recent turns inside the 4-turn freshness window retain pre-loaded `@file` slices.
-#[must_use]
-fn extract_referenced_files_block(section: &str) -> Option<String> {
-    let header = super::file_refs::REFERENCED_FILES_HEADER;
-    let footer_line = format!("\n{}", super::file_refs::REFERENCED_FILES_FOOTER);
-    let start = section.find(header)?;
-    let after_header = start + header.len();
-    let rel_end = section[after_header..].find(&footer_line)?;
-    let end = after_header + rel_end + footer_line.len();
-    Some(format!("\n\n{}", section[start..end].trim()))
-}
-
-/// Extracts a trailing `Terminal Snapshot:\n<fence>\n<body>\n<fence>` block outside earlier
-/// code fences when its inner body is non-empty and not equal to `EMPTY` or `NO_CHANGE`.
-#[must_use]
-fn extract_non_empty_snapshot_block(section: &str) -> Option<String> {
+fn find_snapshot_header_outside_fences(section: &str) -> Option<usize> {
     const HEADER: &str = "Terminal Snapshot:\n";
 
     if !section.contains("Terminal Snapshot:\n```") {
@@ -123,8 +96,89 @@ fn extract_non_empty_snapshot_block(section: &str) -> Option<String> {
         offset += raw_line.len();
     }
 
-    let start = snap_header_offset?;
-    let block = section[start..].trim();
+    snap_header_offset
+}
+
+/// Finds the byte offset of a `\n\n`-delimited `marker` outside backtick code fences.
+#[must_use]
+fn find_top_level_marker_outside_fences(section: &str, marker: &str) -> Option<usize> {
+    let trimmed_marker = marker.trim_start_matches('\n');
+    if !section.contains(trimmed_marker) {
+        return None;
+    }
+
+    let mut offset = 0usize;
+    let mut active_fence_ticks: Option<usize> = None;
+
+    for raw_line in section.split_inclusive('\n') {
+        if active_fence_ticks.is_none()
+            && (offset == 0 || (offset >= 2 && &section[offset - 2..offset] == "\n\n"))
+            && section[offset..].starts_with(trimmed_marker)
+        {
+            return Some(offset);
+        }
+
+        let trimmed_end = raw_line.trim_end_matches(['\r', '\n']);
+        if let Some(fence_len) = active_fence_ticks {
+            let trimmed = trimmed_end.trim();
+            let ticks = trimmed.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= fence_len && trimmed.len() == ticks {
+                active_fence_ticks = None;
+            }
+        } else {
+            let trimmed_start = trimmed_end.trim_start();
+            let ticks = trimmed_start.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= 3 {
+                active_fence_ticks = Some(ticks);
+            }
+        }
+
+        offset += raw_line.len();
+    }
+
+    None
+}
+
+/// Extracts a `--- UPDATE CHANGELOG CONTEXT ---` block from `pre_snapshot_section` (stripping any
+/// trailing `## YOUR IDENTITY` / `## CURRENT TURN CONTEXT` metadata) so recent follow-up
+/// turns inside the 4-turn freshness window retain post-update changelog visibility without
+/// matching changelog markers printed inside a `Terminal Snapshot:` block.
+#[must_use]
+fn extract_changelog_block(pre_snapshot_section: &str) -> Option<String> {
+    let start = find_top_level_marker_outside_fences(
+        pre_snapshot_section,
+        super::WHATS_NEW_CONTEXT_MARKER,
+    )?;
+    let from_marker = &pre_snapshot_section[start..];
+    let end = from_marker
+        .find("\n\n## YOUR IDENTITY")
+        .or_else(|| from_marker.find("\n\n## CURRENT TURN CONTEXT"))
+        .unwrap_or(from_marker.len());
+    let trimmed = from_marker[..end].trim();
+    (!trimmed.is_empty()).then(|| format!("\n\n{trimmed}"))
+}
+
+/// Extracts a `--- REFERENCED FILES (PRE-LOADED VIA @MENTION) --- ... --- END REFERENCED FILES ---`
+/// block from `pre_snapshot_section` outside code fences so recent turns inside the 4-turn
+/// freshness window retain pre-loaded `@file` slices without hoisting debug logs from snapshots.
+#[must_use]
+fn extract_referenced_files_block(pre_snapshot_section: &str) -> Option<String> {
+    let header = super::file_refs::REFERENCED_FILES_HEADER;
+    let footer_line = format!("\n{}", super::file_refs::REFERENCED_FILES_FOOTER);
+    let start = find_top_level_marker_outside_fences(pre_snapshot_section, header)?;
+    let after_header = start + header.len();
+    let rel_end = pre_snapshot_section[after_header..].find(&footer_line)?;
+    let end = after_header + rel_end + footer_line.len();
+    Some(format!("\n\n{}", pre_snapshot_section[start..end].trim()))
+}
+
+/// Extracts a trailing `Terminal Snapshot:\n<fence>\n<body>\n<fence>` block at `snap_start`
+/// when its inner body is non-empty and not equal to `EMPTY` or `NO_CHANGE`.
+#[must_use]
+fn extract_non_empty_snapshot_at(section: &str, snap_start: usize) -> Option<String> {
+    const HEADER: &str = "Terminal Snapshot:\n";
+
+    let block = section.get(snap_start..)?.trim();
     let fenced = block.strip_prefix(HEADER)?;
     let first_nl = fenced.find('\n')?;
     let open_fence = fenced[..first_nl].trim_end_matches('\r');
@@ -701,9 +755,13 @@ pub fn prepare_settled_history_for_speaker(
                                 // (which are freshly injected in the current USER PROMPT), while keeping any
                                 // post-update changelog, `@file` slices, and changed non-empty Terminal Snapshot.
                                 let tail_slice = &text.text[idx..];
-                                let kept_changelog = extract_changelog_block(tail_slice);
-                                let kept_refs = extract_referenced_files_block(tail_slice);
-                                let kept_snap = extract_non_empty_snapshot_block(tail_slice);
+                                let snap_offset = find_snapshot_header_outside_fences(tail_slice);
+                                let pre_snap_slice =
+                                    snap_offset.map_or(tail_slice, |off| &tail_slice[..off]);
+                                let kept_changelog = extract_changelog_block(pre_snap_slice);
+                                let kept_refs = extract_referenced_files_block(pre_snap_slice);
+                                let kept_snap = snap_offset
+                                    .and_then(|off| extract_non_empty_snapshot_at(tail_slice, off));
 
                                 text.text.truncate(idx);
                                 if let Some(changelog_block) = kept_changelog {
@@ -724,8 +782,9 @@ pub fn prepare_settled_history_for_speaker(
                     }
                     rig::message::UserContent::ToolResult(tool_res) if is_old => {
                         // Safeguard 1: Never delete the Message or ToolResult wrapper/call_id.
-                        // Only clip oversized inner text or JSON strings (> 2,000 chars) in the outgoing
-                        // LLM history copy so UI renderers and provider tool pairing stay intact.
+                        // Only clip oversized inner text/JSON strings (> 2,000 chars) and stale
+                        // multimodal tool images in the outgoing LLM history copy so UI renderers
+                        // and provider tool pairing stay intact.
                         for tc in &mut tool_res.content {
                             match tc {
                                 rig::message::ToolResultContent::Text(t) => {
@@ -740,7 +799,11 @@ pub fn prepare_settled_history_for_speaker(
                                 rig::message::ToolResultContent::Json { value } => {
                                     clip_json_strings_in_place(value);
                                 }
-                                _ => {}
+                                rig::message::ToolResultContent::Image(_) => {
+                                    *tc = rig::message::ToolResultContent::text(
+                                        TOOL_IMAGE_CLIP_TEXT,
+                                    );
+                                }
                             }
                         }
                     }
@@ -1594,5 +1657,112 @@ mod tests {
         assert!(cleaned.contains("Please explain."));
         assert!(cleaned.contains("Agent Name: **Sample**"));
         assert!(!cleaned.contains("Agent Name: **Niko Una**"));
+    }
+
+    #[test]
+    fn snapshot_inner_referenced_files_are_never_hoisted_and_stale_tool_images_are_clipped() {
+        // 1. Terminal output containing BOXXY_DEBUG_CONTEXT `--- REFERENCED FILES ---` or
+        //    `--- UPDATE CHANGELOG CONTEXT ---` must stay inside `Terminal Snapshot:` without
+        //    being hoisted into duplicate top-level blocks on Turns 2-5.
+        let debug_snap_with_refs = format!(
+            "[INFO model-context]\n{}\n### `@src/ghost_inner.rs` (`/tmp/src/ghost_inner.rs`)\n```text\n1: fn ghost() {{}}\n```\n{}\n\n--- UPDATE CHANGELOG CONTEXT ---\nCommits:\n- feat: inner log\npanicked at src/main.rs:10",
+            super::super::file_refs::REFERENCED_FILES_HEADER,
+            super::super::file_refs::REFERENCED_FILES_FOOTER,
+        );
+        let mut last_hash = None;
+        let processed =
+            super::super::snapshot::process_snapshot(&debug_snap_with_refs, &mut last_hash);
+        let settled = build_settled_user_history_text("Check crash", "", &processed);
+
+        let prepared = prepare_query_history(
+            vec![user(&settled), asst("Checking."), user("Next turn")],
+            0,
+        );
+        if let Message::User { content } = &prepared[0]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert_eq!(
+                t.text
+                    .matches(super::super::file_refs::REFERENCED_FILES_HEADER)
+                    .count(),
+                1,
+                "inner REFERENCED_FILES_HEADER inside Terminal Snapshot must never be duplicated:\n{}",
+                t.text
+            );
+            assert_eq!(
+                t.text.matches("--- UPDATE CHANGELOG CONTEXT ---").count(),
+                1,
+                "inner UPDATE CHANGELOG CONTEXT inside Terminal Snapshot must never be duplicated:\n{}",
+                t.text
+            );
+            assert!(
+                t.text.starts_with("Check crash\n\nTerminal Snapshot:\n````"),
+                "no hoisted blocks may appear between user prompt and Terminal Snapshot:\n{}",
+                t.text
+            );
+        } else {
+            panic!("Expected recent turn with intact snapshot");
+        }
+
+        // 2. Multimodal `ToolResultContent::Image` (e.g. MCP viewport capture) is clipped once
+        //    outside the 4-turn freshness window while keeping recent tool images intact.
+        let make_img_tool_res = |call_id: &str| Message::User {
+            content: vec![rig::message::UserContent::ToolResult(
+                rig::message::ToolResult {
+                    call: rig::message::ProviderCallId::new(call_id).unwrap().into(),
+                    name: rig::message::ToolName::new("mcp_render_preview").unwrap(),
+                    content: vec![rig::message::ToolResultContent::image_base64(
+                        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJ",
+                        Some(rig::message::ImageMediaType::PNG),
+                        None,
+                    )],
+                    is_error: false,
+                },
+            )],
+        };
+
+        let mut img_history = vec![
+            user("Turn 1 old render"),
+            tool_call_msg("call_img_old", "mcp_render_preview", "scene.blend"),
+            make_img_tool_res("call_img_old"),
+            asst("Rendered Turn 1."),
+        ];
+        for i in 2..=4 {
+            img_history.push(user(&format!("Turn {i}")));
+            img_history.push(asst(&format!("Reply {i}")));
+        }
+        img_history.push(user("Turn 5 recent render"));
+        img_history.push(tool_call_msg(
+            "call_img_recent",
+            "mcp_render_preview",
+            "scene2.blend",
+        ));
+        img_history.push(make_img_tool_res("call_img_recent"));
+        img_history.push(asst("Rendered Turn 5."));
+        img_history.push(user("Turn 6 current"));
+
+        let prepared_imgs = prepare_query_history(img_history, 0);
+
+        if let Message::User { content } = &prepared_imgs[2]
+            && let Some(rig::message::UserContent::ToolResult(tr)) = content.first()
+            && let Some(rig::message::ToolResultContent::Text(t)) = tr.content.first()
+        {
+            assert_eq!(tr.call.to_string(), "call_img_old");
+            assert_eq!(t.text, TOOL_IMAGE_CLIP_TEXT);
+        } else {
+            panic!("Expected stale ToolResultContent::Image to clip into compact text");
+        }
+
+        let recent_idx = prepared_imgs.len() - 2;
+        if let Message::User { content } = &prepared_imgs[recent_idx]
+            && let Some(rig::message::UserContent::ToolResult(tr)) = content.first()
+        {
+            assert!(matches!(
+                tr.content.first(),
+                Some(rig::message::ToolResultContent::Image(_))
+            ));
+        } else {
+            panic!("Expected recent ToolResultContent::Image inside 4-turn window to stay intact");
+        }
     }
 }

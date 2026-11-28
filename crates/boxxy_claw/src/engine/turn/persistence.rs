@@ -17,13 +17,8 @@ pub struct PersistenceContext {
 
 pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<SessionState>>) {
     let mut state_lock = state.lock().await;
-
-    // Optional: Trigger Memory Flush if history is too long
-    let creds = boxxy_ai_core::AiCredentials::new(
-        ctx.settings.get_effective_api_keys(),
-        ctx.settings.ollama_base_url.clone(),
-    )
-    .with_custom_endpoints(ctx.settings.openai_compatible_endpoints.clone());
+    let api_keys_lock = state_lock.api_keys.clone();
+    let ollama_url_lock = state_lock.ollama_url.clone();
 
     // Token-budget & exchange-boundary compaction (OpenCode V2 + rig 0.47 pattern):
     // Measure against the model's `input_limit` (`limit.input` in rig 0.47, falling back to `context_window`)
@@ -149,6 +144,14 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     }
 
     drop(state_lock);
+
+    let ipc_keys = api_keys_lock.read().await.clone();
+    let ipc_ollama = ollama_url_lock.read().await.clone();
+    let creds = crate::engine::agent_config::merge_session_credentials(
+        &ctx.settings,
+        &ipc_keys,
+        &ipc_ollama,
+    );
 
     if !evicted_messages.is_empty() {
         let extractor = crate::engine::summarization::history::DemotionExtractor {

@@ -19,6 +19,8 @@ mod hotswap_dreaming_and_handoff;
 mod incognito_and_roundtable;
 #[path = "workflows/interactive_handoff_and_drama.rs"]
 mod interactive_handoff_and_drama;
+#[path = "workflows/multithread_salvage_wake_llm_and_ipc_creds.rs"]
+mod multithread_salvage_wake_llm_and_ipc_creds;
 #[path = "workflows/osc133_and_workspace_scoping.rs"]
 mod osc133_and_workspace_scoping;
 #[path = "workflows/persistence_and_resume.rs"]
