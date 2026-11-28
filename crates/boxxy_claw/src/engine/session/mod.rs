@@ -20,6 +20,10 @@ pub struct InFlightSnapshot {
     /// active turn (`[...prepared_history, step_prompt]`), preserving all provider
     /// reasoning/tool signatures and warm KV prompt-cache prefixes.
     pub messages: Option<Vec<Arc<Message>>>,
+    /// Index of the current turn's initial user prompt inside `messages` (`prepared_history.len()`),
+    /// allowing completed mid-turn `[Assistant(ToolCall), User(ToolResult)]` pairs at
+    /// `messages[turn_start_idx + 1..]` to be salvaged if the turn is aborted or rejected.
+    pub turn_start_idx: usize,
     /// Human-readable label of the currently executing step (e.g. `"Running cargo test…"`).
     pub active_status: Option<String>,
 }
@@ -27,6 +31,7 @@ pub struct InFlightSnapshot {
 impl InFlightSnapshot {
     pub fn clear(&mut self) {
         self.messages = None;
+        self.turn_start_idx = 0;
         self.active_status = None;
     }
 }
@@ -149,6 +154,85 @@ impl SessionState {
             },
             |spk| (spk.display_name.clone(), spk.character_id.clone()),
         )
+    }
+
+    /// Atomically takes and clears `in_flight_snapshot`, appending any settled mid-turn
+    /// `(Assistant(ToolCall), User(ToolResult))` pairs from the active turn into `self.history`
+    /// so completed reads/searches are never lost when a turn is aborted, rejected, or handed off.
+    pub fn salvage_in_flight_tool_steps(&mut self) -> usize {
+        let (messages_opt, turn_start_idx) = {
+            let mut snap = self
+                .in_flight_snapshot
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let msgs = snap.messages.take();
+            let idx = snap.turn_start_idx;
+            snap.clear();
+            drop(snap);
+            (msgs, idx)
+        };
+
+        let Some(messages) = messages_opt else {
+            return 0;
+        };
+        let Some(tail) = messages.get(turn_start_idx.saturating_add(1)..) else {
+            return 0;
+        };
+        if tail.len() < 2 {
+            return 0;
+        }
+
+        // Only salvage onto an uncommitted turn whose trailing message in `self.history`
+        // is still the initial user prompt pushed by `spawn_turn` (not a tool result or assistant reply).
+        let ends_at_uncommitted_prompt = matches!(
+            self.history.last(),
+            Some(Message::User { content }) if content.iter().all(|c| c.as_tool_result().is_none())
+        );
+        if !ends_at_uncommitted_prompt {
+            return 0;
+        }
+
+        let (spk_name, spk_cid) = self.effective_speaker();
+        let mut salvaged = 0usize;
+        let mut pair_idx = 0usize;
+        while pair_idx + 1 < tail.len() {
+            let asst_candidate = (*tail[pair_idx]).clone();
+            let user_candidate = (*tail[pair_idx + 1]).clone();
+            match (asst_candidate, user_candidate) {
+                (mut asst_msg @ Message::Assistant(_), user_msg @ Message::User { .. }) => {
+                    let has_tool_call = matches!(
+                        &asst_msg,
+                        Message::Assistant(turn) if turn.content.iter().any(|c| c.as_tool_call().is_some())
+                    );
+                    let has_tool_result = matches!(
+                        &user_msg,
+                        Message::User { content } if content.iter().any(|c| c.as_tool_result().is_some())
+                    );
+                    if !has_tool_call || !has_tool_result {
+                        break;
+                    }
+                    if let Message::Assistant(ref mut turn) = asst_msg {
+                        for item in &mut turn.content {
+                            if let rig::message::AssistantContent::Text(t) = item
+                                && !t.text.trim().is_empty()
+                                && crate::engine::turn::history::parse_speaker_tag(&t.text)
+                                    .is_none()
+                            {
+                                t.text = crate::engine::turn::history::tag_assistant_text(
+                                    &spk_cid, &spk_name, &t.text,
+                                );
+                            }
+                        }
+                    }
+                    self.history.push(asst_msg);
+                    self.history.push(user_msg);
+                    salvaged += 2;
+                    pair_idx += 2;
+                }
+                _ => break,
+            }
+        }
+        salvaged
     }
 
     /// Resets transient per-session context, snapshot/file hashes, `/undo` buffers,

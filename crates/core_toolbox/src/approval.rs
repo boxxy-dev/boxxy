@@ -91,6 +91,9 @@ pub trait ApprovalHandler: Send + Sync {
         _new_content_hash: u64,
     ) {
     }
+    /// Record that `path` was deleted by `file_delete` (carrying its pre-delete UTF-8 text
+    /// content when available so `/undo` can restore it and stale-file tracking drops `path`).
+    async fn record_file_deleted(&self, _path: String, _previous_content: Option<String>) {}
 }
 
 /// Announces tool start to the UI indicator and records anonymous tool telemetry.

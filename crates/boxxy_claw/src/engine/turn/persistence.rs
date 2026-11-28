@@ -41,14 +41,27 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
     let token_budget_exceeded = input_limit.is_some_and(|limit| {
         limit > 0
             && state_lock.context_tokens > 0
-            && (state_lock.context_tokens >= (limit * 75 / 100)
-                || state_lock.context_tokens.saturating_add(16_000) >= limit)
+            && state_lock.context_tokens >= (limit * 75 / 100).max(1)
     });
     let should_compact = token_budget_exceeded || state_lock.history.len() >= 80;
+    let high_pressure = input_limit.is_some_and(|limit| {
+        limit > 0 && state_lock.context_tokens >= (limit * 85 / 100).max(1)
+    }) || state_lock.history.len() >= 80;
+    let safe_cut = if should_compact {
+        super::history::find_safe_exchange_cut(&state_lock.history, 6).or_else(|| {
+            high_pressure
+                .then(|| {
+                    super::history::find_safe_exchange_cut(&state_lock.history, 2)
+                        .or_else(|| super::history::find_safe_exchange_cut(&state_lock.history, 1))
+                })
+                .flatten()
+        })
+    } else {
+        None
+    };
 
-    let evicted_messages = if should_compact
-        && let Some(cut) = super::history::find_safe_exchange_cut(&state_lock.history, 6)
-    {
+    let evicted_messages = safe_cut.map_or_else(Vec::new, |cut| {
+        let pre_compact_bytes = serde_json::to_string(&state_lock.history).map_or(0, |s| s.len());
         let mut kept = state_lock.history.split_off(cut);
         let demoted = std::mem::take(&mut state_lock.history);
         let demoted_len = demoted.len();
@@ -66,10 +79,19 @@ pub async fn perform_persistence(ctx: PersistenceContext, state: Arc<Mutex<Sessi
 
         state_lock.history = kept;
         state_lock.flushed_watermark = new_watermark;
+        if state_lock.context_tokens > 0 && pre_compact_bytes > 0 {
+            let post_compact_bytes =
+                serde_json::to_string(&state_lock.history).map_or(0, |s| s.len());
+            let scaled = u64::try_from(
+                u128::from(state_lock.context_tokens) * u128::from(post_compact_bytes as u64)
+                    / u128::from(pre_compact_bytes as u64),
+            )
+            .unwrap_or(u64::MAX);
+            let cap = input_limit.map_or(u64::MAX, |l| (l * 60 / 100).max(1));
+            state_lock.context_tokens = scaled.min(cap).max(1);
+        }
         demoted.into_iter().skip(already_flushed).collect()
-    } else {
-        vec![]
-    };
+    });
 
     // --- ATOMIC PERSISTENCE ---
     let history_json = serde_json::to_string(&state_lock.history).unwrap_or_default();

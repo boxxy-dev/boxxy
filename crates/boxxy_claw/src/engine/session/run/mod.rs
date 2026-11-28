@@ -230,6 +230,7 @@ impl ClawSession {
             ClawMessage::WakeSummaryComplete { result } => {
                 let mut state_lock = self.state.lock().await;
                 state_lock.status = crate::engine::AgentStatus::Waiting;
+                let mut appended_wake_summary = false;
 
                 match result {
                     Ok(summary) => {
@@ -242,6 +243,7 @@ impl ClawSession {
                             state_lock.history.push(rig::message::Message::assistant(
                                 crate::engine::turn::history::WHILE_YOU_SLEPT_ACK,
                             ));
+                            appended_wake_summary = true;
                         }
                     }
                     Err(e) => {
@@ -253,6 +255,10 @@ impl ClawSession {
                 let current_quality = state_lock.context_quality.clone();
                 let agent_name = self.name.clone();
                 drop(state_lock);
+
+                if appended_wake_summary {
+                    self.persist_history_if_present().await;
+                }
 
                 let character_id = self.character_id.clone();
                 let _ = self
@@ -293,6 +299,20 @@ impl ClawSession {
                 }
             }
             ClawMessage::SleepToggle(sleep) => {
+                if sleep {
+                    let _ = self.cancel_active_turn_and_proposals(ctx).await;
+                    ctx.workspace.release_all_locks(&self.pane_id).await;
+                    {
+                        let mut state_lock = self.state.lock().await;
+                        state_lock.active_speaker = None;
+                        state_lock.next_roundtable_turn = None;
+                        state_lock.roundtable.pause_for_interjection();
+                        if matches!(state_lock.status, crate::engine::AgentStatus::Locking { .. }) {
+                            state_lock.status = crate::engine::AgentStatus::Waiting;
+                        }
+                    }
+                    self.persist_history_if_present().await;
+                }
                 let target_state = if sleep {
                     crate::engine::AgentStatus::Sleep
                 } else {
@@ -692,6 +712,7 @@ impl ClawSession {
 
                 let (speaker_name, speaker_cid) = {
                     let mut state_lock = self.state.lock().await;
+                    let _ = state_lock.salvage_in_flight_tool_steps();
                     let (spk_name, spk_cid) = state_lock.effective_speaker();
                     let _ = state_lock.pending_terminal_reply.take();
                     state_lock.terminal_command_accepted = false;

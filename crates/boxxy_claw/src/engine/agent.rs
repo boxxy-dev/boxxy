@@ -38,6 +38,7 @@ const BTW_STREAM_INTERVAL: std::time::Duration = std::time::Duration::from_milli
 #[derive(Clone)]
 struct InFlightTranscriptHook {
     slot: Arc<std::sync::Mutex<crate::engine::session::InFlightSnapshot>>,
+    turn_start_idx: usize,
 }
 
 impl AgentHook for InFlightTranscriptHook {
@@ -55,6 +56,7 @@ impl AgentHook for InFlightTranscriptHook {
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             guard.messages = Some(committed);
+            guard.turn_start_idx = self.turn_start_idx;
             guard.active_status = Some("Thinking…".to_string());
         }
         async { CompletionCallAction::Continue }
@@ -339,12 +341,14 @@ impl ClawAgent {
                 };
                 set_in_flight_status("Thinking…".to_string());
 
+                let turn_start_idx = history.len();
                 let mut stream = self
                     .agent
                     .prompt(msg)
                     .history(history)
                     .add_hook(InFlightTranscriptHook {
                         slot: sctx.in_flight_snapshot.clone(),
+                        turn_start_idx,
                     })
                     .tool_concurrency(4)
                     .ordered_by_footprint(true)

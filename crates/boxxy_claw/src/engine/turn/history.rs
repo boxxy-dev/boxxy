@@ -83,6 +83,74 @@ fn extract_referenced_files_block(section: &str) -> Option<String> {
     Some(format!("\n\n{}", section[start..end].trim()))
 }
 
+/// Extracts a trailing `Terminal Snapshot:\n<fence>\n<body>\n<fence>` block outside earlier
+/// code fences when its inner body is non-empty and not equal to `EMPTY` or `NO_CHANGE`.
+#[must_use]
+fn extract_non_empty_snapshot_block(section: &str) -> Option<String> {
+    const HEADER: &str = "Terminal Snapshot:\n";
+
+    if !section.contains("Terminal Snapshot:\n```") {
+        return None;
+    }
+
+    let mut snap_header_offset: Option<usize> = None;
+    let mut offset = 0usize;
+    let mut active_fence_ticks: Option<usize> = None;
+
+    for raw_line in section.split_inclusive('\n') {
+        if active_fence_ticks.is_none()
+            && (offset == 0 || (offset >= 2 && &section[offset - 2..offset] == "\n\n"))
+            && section[offset..].starts_with(HEADER)
+        {
+            snap_header_offset = Some(offset);
+        }
+
+        let trimmed_end = raw_line.trim_end_matches(['\r', '\n']);
+        if let Some(fence_len) = active_fence_ticks {
+            let trimmed = trimmed_end.trim();
+            let ticks = trimmed.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= fence_len && trimmed.len() == ticks {
+                active_fence_ticks = None;
+            }
+        } else {
+            let trimmed_start = trimmed_end.trim_start();
+            let ticks = trimmed_start.bytes().take_while(|&b| b == b'`').count();
+            if ticks >= 3 {
+                active_fence_ticks = Some(ticks);
+            }
+        }
+
+        offset += raw_line.len();
+    }
+
+    let start = snap_header_offset?;
+    let block = section[start..].trim();
+    let fenced = block.strip_prefix(HEADER)?;
+    let first_nl = fenced.find('\n')?;
+    let open_fence = fenced[..first_nl].trim_end_matches('\r');
+    let fence_ticks = open_fence.bytes().take_while(|&b| b == b'`').count();
+    if fence_ticks < 3 || open_fence.len() != fence_ticks {
+        return None;
+    }
+
+    let after_open = &fenced[first_nl + 1..];
+    let inner = after_open
+        .strip_suffix(open_fence)
+        .map_or(after_open, |b| {
+            b.strip_suffix('\n').unwrap_or(b).trim_end_matches('\r')
+        })
+        .trim();
+
+    if inner.is_empty()
+        || inner == super::snapshot::SNAPSHOT_EMPTY_MARKER
+        || inner == super::snapshot::SNAPSHOT_NO_CHANGE_MARKER
+    {
+        return None;
+    }
+
+    Some(format!("\n\n{block}"))
+}
+
 /// Builds the settled user message text stored in `SessionState.history` and SQLite.
 ///
 /// Retains user-authored text (plus inline attachments), `@file` slices, and changed non-empty
@@ -271,6 +339,7 @@ pub fn build_checkpoint_pair(evicted: &[Message]) -> Option<(Message, Message)> 
                             .function
                             .arguments
                             .get("path")
+                            .or_else(|| tc.function.arguments.get("resource"))
                             .or_else(|| tc.function.arguments.get("command"))
                             .or_else(|| tc.function.arguments.get("pattern"))
                             .and_then(|v| v.as_str())
@@ -416,8 +485,20 @@ fn clip_json_strings_in_place(val: &mut serde_json::Value) {
 /// Locates the first `\n\n`-prefixed dynamic context block outside backtick code fences so
 /// pasted logs or markdown inside `--- ATTACHMENTS ---` never prematurely truncate an attachment.
 #[must_use]
-fn find_dynamic_tail_outside_fences(s: &str) -> Option<usize> {
-    const MARKERS: &[&str] = &[
+pub(crate) fn find_dynamic_tail_outside_fences(s: &str) -> Option<usize> {
+    find_section_outside_fences(s, false)
+}
+
+/// Locates the first appended attachment or dynamic context section outside backtick code fences
+/// so inline code blocks inside user prompts never prematurely truncate `flush_history` or checkpoints.
+#[must_use]
+pub(crate) fn find_flush_cutoff_outside_fences(s: &str) -> Option<usize> {
+    find_section_outside_fences(s, true)
+}
+
+#[must_use]
+fn find_section_outside_fences(s: &str, include_attachments: bool) -> Option<usize> {
+    const DYN_MARKERS: &[&str] = &[
         "--- UPDATE CHANGELOG CONTEXT ---",
         "## YOUR IDENTITY",
         "## CURRENT TURN CONTEXT",
@@ -425,8 +506,11 @@ fn find_dynamic_tail_outside_fences(s: &str) -> Option<usize> {
         "--- GLOBAL RADAR",
         "Terminal Snapshot:\n```",
     ];
+    const FLUSH_EXTRA_MARKERS: &[&str] = &["--- ATTACHMENTS ---"];
 
-    if !MARKERS.iter().any(|m| s.contains(m)) {
+    let has_any = DYN_MARKERS.iter().any(|m| s.contains(m))
+        || (include_attachments && FLUSH_EXTRA_MARKERS.iter().any(|m| s.contains(m)));
+    if !has_any {
         return None;
     }
 
@@ -434,10 +518,20 @@ fn find_dynamic_tail_outside_fences(s: &str) -> Option<usize> {
     let mut active_fence_ticks: Option<usize> = None;
 
     for raw_line in s.split_inclusive('\n') {
-        if active_fence_ticks.is_none() && offset >= 2 && &s[offset - 2..offset] == "\n\n" {
+        if active_fence_ticks.is_none() && offset >= 1 && s.as_bytes()[offset - 1] == b'\n' {
             let rest = &s[offset..];
-            if MARKERS.iter().any(|m| rest.starts_with(m)) {
+            let preceded_by_blank_line = offset >= 2 && &s[offset - 2..offset] == "\n\n";
+            if preceded_by_blank_line
+                && (DYN_MARKERS.iter().any(|m| rest.starts_with(m))
+                    || (include_attachments
+                        && FLUSH_EXTRA_MARKERS.iter().any(|m| rest.starts_with(m))))
+            {
                 return Some(offset - 2);
+            }
+            if include_attachments
+                && rest.starts_with("--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---")
+            {
+                return Some(offset - 1);
             }
         }
 
@@ -609,22 +703,7 @@ pub fn prepare_settled_history_for_speaker(
                                 let tail_slice = &text.text[idx..];
                                 let kept_changelog = extract_changelog_block(tail_slice);
                                 let kept_refs = extract_referenced_files_block(tail_slice);
-                                let kept_snap = tail_slice
-                                    .find("\n\nTerminal Snapshot:\n```")
-                                    .map(|rel| &tail_slice[rel..])
-                                    .filter(|snap_block| {
-                                        !snap_block.contains(super::snapshot::SNAPSHOT_NO_CHANGE_MARKER)
-                                            && !snap_block.contains(super::snapshot::SNAPSHOT_EMPTY_MARKER)
-                                            && snap_block
-                                                .trim()
-                                                .strip_prefix("Terminal Snapshot:\n")
-                                                .is_some_and(|fenced| {
-                                                    fenced
-                                                        .lines()
-                                                        .any(|l| !l.trim().bytes().all(|b| b == b'`'))
-                                                })
-                                    })
-                                    .map(str::to_string);
+                                let kept_snap = extract_non_empty_snapshot_block(tail_slice);
 
                                 text.text.truncate(idx);
                                 if let Some(changelog_block) = kept_changelog {
@@ -1483,5 +1562,37 @@ mod tests {
         } else {
             panic!("Expected retained Turn 5 OSC 133 snapshot");
         }
+    }
+
+    #[test]
+    fn snapshot_with_embedded_debug_markers_is_preserved_and_fenced_flush_text_stays_intact() {
+        let debug_log_snap = "[INFO model-context]\nTerminal Snapshot:\n```\n[TERMINAL_SNAPSHOT: EMPTY]\n```\npanicked at src/module.rs:42";
+        let mut last_hash = None;
+        let processed = super::super::snapshot::process_snapshot(debug_log_snap, &mut last_hash);
+        let settled = build_settled_user_history_text("Diagnose crash", "", &processed);
+
+        let prepared = prepare_query_history(
+            vec![user(&settled), asst("Investigating."), user("Follow-up")],
+            0,
+        );
+        if let Message::User { content } = &prepared[0]
+            && let Some(rig::message::UserContent::Text(t)) = content.first()
+        {
+            assert!(
+                t.text.contains("panicked at src/module.rs:42")
+                    && t.text.contains("[TERMINAL_SNAPSHOT: EMPTY]"),
+                "real terminal output containing BOXXY_DEBUG_CONTEXT markers must not be dropped:\n{}",
+                t.text
+            );
+        } else {
+            panic!("Expected preserved snapshot block");
+        }
+
+        let inline_fenced_prompt = "Why did this log appear?\n```text\nsample\n\n## YOUR IDENTITY\nAgent Name: **Sample**\n```\nPlease explain.\n\n## YOUR IDENTITY\nAgent Name: **Niko Una**";
+        let cleaned =
+            crate::engine::summarization::history::clean_user_text_for_flush(inline_fenced_prompt);
+        assert!(cleaned.contains("Please explain."));
+        assert!(cleaned.contains("Agent Name: **Sample**"));
+        assert!(!cleaned.contains("Agent Name: **Niko Una**"));
     }
 }

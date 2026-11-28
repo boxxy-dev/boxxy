@@ -189,7 +189,7 @@ impl ClawSession {
 
     /// Cancels any awaiting tool proposals and aborts any in-flight LLM turn cleanly,
     /// returning `true` if either an active turn or a pending proposal was cancelled.
-    async fn cancel_active_turn_and_proposals(&self, ctx: &mut RunContext) -> bool {
+    pub(super) async fn cancel_active_turn_and_proposals(&self, ctx: &mut RunContext) -> bool {
         let mut had_active = false;
 
         if let Some(handle) = ctx.current_turn.take() {
@@ -197,11 +197,7 @@ impl ClawSession {
             had_active = true;
             let (thinking_name, thinking_cid) = {
                 let mut state_lock = self.state.lock().await;
-                state_lock
-                    .in_flight_snapshot
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .clear();
+                let _ = state_lock.salvage_in_flight_tool_steps();
                 state_lock.current_turn_user_images.clear();
                 state_lock.generated_images_this_turn.clear();
                 state_lock.effective_speaker()
@@ -528,6 +524,7 @@ impl ClawSession {
                 user_bubble,
             } => {
                 let had_active = self.cancel_active_turn_and_proposals(ctx).await;
+                self.persist_history_if_present().await;
                 if let Some(bubble) = user_bubble {
                     let thumb_paths = cache_user_attachment_thumbnails(&image_attachments).await;
                     self.send_ui(ClawEngineEvent::UserMessage {

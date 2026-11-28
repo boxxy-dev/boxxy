@@ -43,7 +43,7 @@ impl DemotionExtractor {
 }
 
 /// Strips dynamic context blocks (`## YOUR IDENTITY`, `## CURRENT TURN CONTEXT`, etc.)
-/// from a user message text so background memory flush calls don't waste tokens on snapshots.
+/// outside code fences from a user message text so background memory flush calls don't waste tokens on snapshots.
 pub(crate) fn clean_user_text_for_flush(raw: &str) -> &str {
     let trimmed_start = raw.trim_start();
     if trimmed_start.starts_with("[ROUNDTABLE TURN")
@@ -51,21 +51,8 @@ pub(crate) fn clean_user_text_for_flush(raw: &str) -> &str {
     {
         return "";
     }
-    let mut end = raw.len();
-    for marker in [
-        "\n\n--- ATTACHMENTS ---",
-        "\n\n--- UPDATE CHANGELOG CONTEXT ---",
-        "\n\n## YOUR IDENTITY",
-        "\n\n## CURRENT TURN CONTEXT",
-        "\n\n--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---",
-        "\n--- REFERENCED FILES (PRE-LOADED VIA @MENTION) ---",
-        "\n\n--- GLOBAL RADAR",
-        "\n\nTerminal Snapshot:\n```",
-    ] {
-        if let Some(idx) = raw.find(marker) {
-            end = end.min(idx);
-        }
-    }
+    let end =
+        crate::engine::turn::history::find_flush_cutoff_outside_fences(raw).unwrap_or(raw.len());
     crate::engine::turn::extract_user_authored_prompt(&raw[..end])
 }
 
@@ -118,6 +105,7 @@ pub async fn flush_history(
                 }
             }
             Message::Assistant(turn) => {
+                let mut wrote_prose = false;
                 for raw_text in turn
                     .content
                     .iter()
@@ -133,6 +121,7 @@ pub async fn flush_history(
                         && trimmed != crate::engine::turn::history::SESSION_CHECKPOINT_ACK
                         && trimmed != crate::engine::turn::history::WHILE_YOU_SLEPT_ACK
                     {
+                        wrote_prose = true;
                         if trimmed.starts_with("↩️ **Reverted file changes") {
                             let _ = writeln!(
                                 text_to_summarize,
@@ -141,6 +130,45 @@ pub async fn flush_history(
                         } else {
                             let _ = writeln!(text_to_summarize, "ASSISTANT: {trimmed}");
                         }
+                    }
+                }
+                if !wrote_prose {
+                    let mut tool_hints: Vec<String> = Vec::new();
+                    for tc in turn
+                        .content
+                        .iter()
+                        .filter_map(rig::message::AssistantContent::as_tool_call)
+                    {
+                        let name = &tc.function.name;
+                        let hint = tc
+                            .function
+                            .arguments
+                            .get("path")
+                            .or_else(|| tc.function.arguments.get("resource"))
+                            .or_else(|| tc.function.arguments.get("command"))
+                            .or_else(|| tc.function.arguments.get("pattern"))
+                            .and_then(serde_json::Value::as_str)
+                            .map_or_else(
+                                || name.to_string(),
+                                |s| {
+                                    let end = s.floor_char_boundary(48);
+                                    if end < s.len() {
+                                        format!("{name}({}...)", &s[..end])
+                                    } else {
+                                        format!("{name}({s})")
+                                    }
+                                },
+                            );
+                        if tool_hints.len() < 8 && !tool_hints.contains(&hint) {
+                            tool_hints.push(hint);
+                        }
+                    }
+                    if !tool_hints.is_empty() {
+                        let _ = writeln!(
+                            text_to_summarize,
+                            "ASSISTANT_TOOLS: {}",
+                            tool_hints.join(", ")
+                        );
                     }
                 }
             }

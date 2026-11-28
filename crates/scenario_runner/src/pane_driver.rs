@@ -368,6 +368,14 @@ impl PaneDriver {
         }
     }
 
+    /// Approves or rejects a pending `ProposeFileDelete` proposal.
+    ///
+    /// # Errors
+    /// Returns an error if the session channel is closed.
+    pub async fn reply_file_delete(&self, approved: bool) -> Result<()> {
+        self.send(ClawMessage::FileDeleteReply { approved }).await
+    }
+
     /// Notifies the session that a shell command finished with `exit_code` and `snapshot`.
     ///
     /// # Errors

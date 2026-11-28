@@ -27,11 +27,7 @@ impl ClawSession {
 
         {
             let mut state_lock = self.state.lock().await;
-            state_lock
-                .in_flight_snapshot
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                .clear();
+            let _ = state_lock.salvage_in_flight_tool_steps();
             state_lock.last_turn_paused_queue = false;
             state_lock.status = crate::engine::AgentStatus::Waiting;
             state_lock.active_speaker = None;

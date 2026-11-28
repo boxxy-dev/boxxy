@@ -238,4 +238,9 @@ impl ApprovalHandler for MockApproval {
             .lock()
             .push((path, previous_content, new_content_hash));
     }
+
+    async fn record_file_deleted(&self, path: String, previous_content: Option<String>) {
+        self.read_hashes.lock().remove(&path);
+        self.snapshots.lock().push((path, previous_content, 0));
+    }
 }

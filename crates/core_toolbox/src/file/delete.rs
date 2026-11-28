@@ -77,6 +77,16 @@ impl Tool for FileDeleteTool {
         let base_dir = resolve_live_cwd(self.approval.as_ref(), &self.current_dir).await;
         let path = resolve_path(&base_dir, raw_path);
 
+        let blacklist = crate::blacklist::load_blacklist();
+        if crate::blacklist::is_path_blacklisted(std::path::Path::new(&path), &blacklist) {
+            let out = FileDeleteOutput {
+                success: false,
+                error: Some("Path is blacklisted for security reasons.".to_string()),
+            };
+            finish_tool(self.approval.as_ref(), Self::NAME, &out).await;
+            return Ok(out);
+        }
+
         let outcome = await_proposal(
             self.approval.as_ref(),
             self.approval.propose_file_delete(path.clone()),
@@ -84,11 +94,17 @@ impl Tool for FileDeleteTool {
         .await;
 
         let out = if outcome.is_approved() {
-            match self.env.delete_file(path).await {
-                Ok(()) => FileDeleteOutput {
-                    success: true,
-                    error: None,
-                },
+            let previous_content = self.env.read_file(path.clone(), 0, 0).await.ok();
+            match self.env.delete_file(path.clone()).await {
+                Ok(()) => {
+                    self.approval
+                        .record_file_deleted(path, previous_content)
+                        .await;
+                    FileDeleteOutput {
+                        success: true,
+                        error: None,
+                    }
+                }
                 Err(e) => FileDeleteOutput {
                     success: false,
                     error: Some(format!("Environment Error: {e}")),
@@ -157,5 +173,56 @@ mod tests {
         assert!(!delete_out.success);
         assert_eq!(delete_out.error.as_deref(), Some("[USER_EXPLICIT_REJECT]"));
         assert_eq!(approval.results.lock().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn file_delete_blocks_blacklist_and_records_deleted_snapshot_on_approval() {
+        let mut ctx = ToolContext::default();
+        let env = Arc::new(MockEnv::new());
+        *env.file_content.lock() = "pub fn legacy() {}\n".to_string();
+        let approval = Arc::new(MockApproval::approved(Some("/workspace")));
+        approval
+            .read_hashes
+            .lock()
+            .insert("/workspace/src/legacy.rs".to_string(), 12345);
+
+        let delete_tool = FileDeleteTool {
+            env,
+            current_dir: "/workspace".to_string(),
+            approval: approval.clone(),
+        };
+
+        let blocked = delete_tool
+            .call(
+                &mut ctx,
+                FileDeleteArgs {
+                    path: ".ssh/id_ed25519".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(!blocked.success);
+        assert!(
+            blocked
+                .error
+                .as_deref()
+                .is_some_and(|e| e.contains("blacklisted"))
+        );
+
+        let deleted = delete_tool
+            .call(
+                &mut ctx,
+                FileDeleteArgs {
+                    path: "src/legacy.rs".to_string(),
+                },
+            )
+            .await
+            .unwrap();
+        assert!(deleted.success);
+        assert!(!approval.read_hashes.lock().contains_key("/workspace/src/legacy.rs"));
+        let snaps = approval.snapshots.lock();
+        assert_eq!(snaps.len(), 1);
+        assert_eq!(snaps[0].0, "/workspace/src/legacy.rs");
+        assert_eq!(snaps[0].1.as_deref(), Some("pub fn legacy() {}\n"));
     }
 }

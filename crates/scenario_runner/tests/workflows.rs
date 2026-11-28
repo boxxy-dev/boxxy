@@ -29,6 +29,8 @@ mod pty_and_cli;
 mod queue_btw_and_abort;
 #[path = "workflows/rebind_headless_and_collab_tools.rs"]
 mod rebind_headless_and_collab_tools;
+#[path = "workflows/salvage_delete_and_small_window_compaction.rs"]
+mod salvage_delete_and_small_window_compaction;
 #[path = "workflows/skills_and_memories.rs"]
 mod skills_and_memories;
 #[path = "workflows/sleep_and_multimodal.rs"]

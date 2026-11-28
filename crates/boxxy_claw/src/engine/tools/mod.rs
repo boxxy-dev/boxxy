@@ -473,6 +473,36 @@ impl ApprovalHandler for ClawApprovalHandler {
             }
         }
     }
+
+    async fn record_file_deleted(&self, path: String, previous_content: Option<String>) {
+        const MAX_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+        let mut state = self.state.lock().await;
+        state.read_file_hashes.remove(&path);
+
+        if let Some(pos) = state
+            .current_turn_snapshots
+            .iter()
+            .position(|(p, _)| p == &path)
+        {
+            // If `path` was newly created earlier in this same turn (`None`) and then deleted,
+            // its net disk state matches the pre-turn baseline, so drop the no-op entry.
+            if state.current_turn_snapshots[pos].1.is_none() {
+                state.current_turn_snapshots.remove(pos);
+            }
+            return;
+        }
+
+        if let Some(prev) = previous_content {
+            let current_bytes: usize = state
+                .current_turn_snapshots
+                .iter()
+                .map(|(_, c)| c.as_ref().map_or(0, String::len))
+                .sum();
+            if current_bytes.saturating_add(prev.len()) <= MAX_SNAPSHOT_BYTES {
+                state.current_turn_snapshots.push((path, Some(prev)));
+            }
+        }
+    }
 }
 
 #[async_trait::async_trait]
