@@ -707,14 +707,35 @@ pub fn spawn_dispatch(
                         };
                     session_usage.set(SessionUsage {
                         context_tokens: *context_tokens,
-                        context_window: *context_window,
+                        context_window: context_window.filter(|&w| w > 0),
                         total_tokens: *total,
-                        cost_usd: *total_cost_usd,
+                        cost_usd: if total_cost_usd.is_finite() && *total_cost_usd >= 0.0 {
+                            *total_cost_usd
+                        } else {
+                            0.0
+                        },
                         tools_used: prev_tools,
                     });
                     if overlay.is_visible() && overlay.pane_owns_focus() {
                         overlay.grab_input_focus();
                     }
+                }
+                ClawEngineEvent::UsageUpdated {
+                    total_tokens: total,
+                    context_tokens,
+                    context_window,
+                    total_cost_usd,
+                } => {
+                    let mut su = session_usage.get();
+                    su.total_tokens = *total;
+                    su.context_tokens = *context_tokens;
+                    su.context_window = context_window.filter(|&w| w > 0);
+                    su.cost_usd = if total_cost_usd.is_finite() && *total_cost_usd >= 0.0 {
+                        *total_cost_usd
+                    } else {
+                        0.0
+                    };
+                    session_usage.set(su);
                 }
                 ClawEngineEvent::PinStatusChanged(pinned) => {
                     is_pinned.set(*pinned);
@@ -827,7 +848,7 @@ pub fn spawn_dispatch(
                     let mut su = session_usage.get();
                     su.tools_used = su.tools_used.saturating_add(1);
                     if let Some(usage) = usage {
-                        su.record_turn(usage);
+                        su.record_side_turn(usage);
                     }
                     session_usage.set(su);
                     if tool_name == "run_background_command" {

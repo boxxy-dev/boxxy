@@ -1,6 +1,6 @@
 //! Unified `BoxxyAgent` wrapper and agent construction factories.
 
-use crate::catalog::enrich_usage_with_endpoints_cost;
+use crate::catalog::enrich_prompt_response_usage;
 use crate::credentials::AiCredentials;
 use crate::hook::ModelContextHook;
 use crate::providers::{build_provider_model_with_options, configure_agent_builder};
@@ -71,8 +71,8 @@ impl BoxxyAgent {
                 "\n=== MODEL RESPONSE ===\n{output}\n======================\n"
             );
         }
-        let usage = enrich_usage_with_endpoints_cost(
-            res.usage,
+        let usage = enrich_prompt_response_usage(
+            &res,
             &self.state.provider,
             &self.state.endpoints,
         );

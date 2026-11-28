@@ -162,6 +162,7 @@ mod pending_drain_tests {
             pending_lazy_diagnosis: None,
             persistent_agent: None,
             current_claw_model: None,
+            current_context_window: None,
             current_memory_model: None,
             current_search_label: "Off".to_string(),
             last_tools: None,

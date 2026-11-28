@@ -26,6 +26,12 @@ pub struct InFlightSnapshot {
     pub turn_start_idx: usize,
     /// Human-readable label of the currently executing step (e.g. `"Running cargo test…"`).
     pub active_status: Option<String>,
+    /// Cumulative tokens billed across already-completed model steps of the active turn.
+    pub settled_tokens: u64,
+    /// Context window occupancy reported by the latest completed model step of the active turn.
+    pub settled_context_tokens: u64,
+    /// Cumulative USD cost billed across already-completed model steps of the active turn.
+    pub settled_cost_usd: f64,
 }
 
 impl InFlightSnapshot {
@@ -33,6 +39,9 @@ impl InFlightSnapshot {
         self.messages = None;
         self.turn_start_idx = 0;
         self.active_status = None;
+        self.settled_tokens = 0;
+        self.settled_context_tokens = 0;
+        self.settled_cost_usd = 0.0;
     }
 }
 
@@ -90,6 +99,7 @@ pub struct SessionState {
     pub pending_lazy_diagnosis: Option<(String, String, String)>,
     pub persistent_agent: Option<crate::engine::agent::ClawAgent>,
     pub current_claw_model: Option<boxxy_model_selection::ModelProvider>,
+    pub current_context_window: Option<u64>,
     pub current_memory_model: Option<boxxy_model_selection::ModelProvider>,
     pub current_search_label: String,
     pub last_tools: Option<Vec<String>>,
@@ -156,30 +166,46 @@ impl SessionState {
         )
     }
 
-    /// Atomically takes and clears `in_flight_snapshot`, appending any settled mid-turn
-    /// `(Assistant(ToolCall), User(ToolResult))` pairs from the active turn into `self.history`
-    /// so completed reads/searches are never lost when a turn is aborted, rejected, or handed off.
-    pub fn salvage_in_flight_tool_steps(&mut self) -> usize {
-        let (messages_opt, turn_start_idx) = {
+    /// Atomically takes and clears `in_flight_snapshot`, salvaging both any already-billed
+    /// per-step token/cost counters and any settled mid-turn `(Assistant(ToolCall), User(ToolResult))`
+    /// pairs into `self` so aborted, rejected, or handed-off turns never lose completed work or spend.
+    ///
+    /// Returns `(salvaged_message_count, salvaged_any_usage)`.
+    pub fn salvage_in_flight_tool_steps(&mut self) -> (usize, bool) {
+        let (messages_opt, turn_start_idx, settled_tokens, settled_ctx, settled_cost) = {
             let mut snap = self
                 .in_flight_snapshot
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
             let msgs = snap.messages.take();
             let idx = snap.turn_start_idx;
+            let tok = snap.settled_tokens;
+            let ctx = snap.settled_context_tokens;
+            let cost = snap.settled_cost_usd;
             snap.clear();
             drop(snap);
-            (msgs, idx)
+            (msgs, idx, tok, ctx, cost)
         };
 
+        let salvaged_usage = settled_tokens > 0 || settled_ctx > 0 || settled_cost > 0.0;
+        if salvaged_usage {
+            self.total_tokens = self.total_tokens.saturating_add(settled_tokens);
+            if settled_ctx > 0 {
+                self.context_tokens = settled_ctx;
+            }
+            if settled_cost.is_finite() && settled_cost > 0.0 {
+                self.total_cost_usd += settled_cost;
+            }
+        }
+
         let Some(messages) = messages_opt else {
-            return 0;
+            return (0, salvaged_usage);
         };
         let Some(tail) = messages.get(turn_start_idx.saturating_add(1)..) else {
-            return 0;
+            return (0, salvaged_usage);
         };
         if tail.len() < 2 {
-            return 0;
+            return (0, salvaged_usage);
         }
 
         // Only salvage onto an uncommitted turn whose trailing message in `self.history`
@@ -189,7 +215,7 @@ impl SessionState {
             Some(Message::User { content }) if content.iter().all(|c| c.as_tool_result().is_none())
         );
         if !ends_at_uncommitted_prompt {
-            return 0;
+            return (0, salvaged_usage);
         }
 
         let (spk_name, spk_cid) = self.effective_speaker();
@@ -232,7 +258,7 @@ impl SessionState {
                 _ => break,
             }
         }
-        salvaged
+        (salvaged, salvaged_usage)
     }
 
     /// Resets transient per-session context, snapshot/file hashes, `/undo` buffers,
@@ -371,6 +397,10 @@ impl ClawSession {
                 pending_lazy_diagnosis: None,
                 persistent_agent: None,
                 current_claw_model: settings.claw_model.clone(),
+                current_context_window: boxxy_ai_core::model_context_window_with_endpoints(
+                    &settings.claw_model,
+                    &settings.openai_compatible_endpoints,
+                ),
                 current_memory_model: settings.effective_memory_model(),
                 current_search_label: crate::engine::agent_config::resolve_active_search_label(
                     &settings,
@@ -442,6 +472,10 @@ impl ClawSession {
                     state.web_search_enabled,
                 )
                 .to_string();
+            state.current_context_window = boxxy_ai_core::model_context_window_with_endpoints(
+                &resolved_claw,
+                &settings.openai_compatible_endpoints,
+            );
             state.current_claw_model = resolved_claw;
             state.current_memory_model = settings.effective_memory_model();
         }
@@ -473,29 +507,81 @@ impl ClawSession {
             .await;
     }
 
-    /// Updates `sessions.history_json` in SQLite when an already-persisted session mutates
-    /// `SessionState.history` locally (such as `/undo`, proposal rejection, or ghost-dismissal),
-    /// ensuring cross-pane `/resume` restores exact LLM history without creating phantom rows.
+    /// Emits `ClawEngineEvent::UsageUpdated` with the session's authoritative token, context,
+    /// and USD cost counters so the Claw sidebar stays in sync across out-of-band mutations.
+    pub(super) async fn emit_usage_updated(&self) {
+        let (is_headless, total_tokens, context_tokens, context_window, total_cost_usd) = {
+            let state_lock = self.state.lock().await;
+            let settings = boxxy_preferences::Settings::load();
+            let resolved_model = if state_lock.incognito {
+                settings.claw_model.clone()
+            } else if !state_lock.character_id.is_empty() {
+                settings.resolve_character_model(&state_lock.character_id)
+            } else {
+                state_lock.current_claw_model.clone()
+            };
+            let win = boxxy_ai_core::model_context_window_with_endpoints(
+                &resolved_model,
+                &settings.openai_compatible_endpoints,
+            );
+            (
+                state_lock.is_headless,
+                state_lock.total_tokens,
+                state_lock.context_tokens,
+                win,
+                state_lock.total_cost_usd,
+            )
+        };
+        if !is_headless {
+            let _ = self
+                .tx_ui
+                .send(ClawEngineEvent::UsageUpdated {
+                    total_tokens,
+                    context_tokens,
+                    context_window,
+                    total_cost_usd,
+                })
+                .await;
+        }
+    }
+
+    /// Updates `sessions.history_json` and session token/cost metrics in SQLite when an
+    /// already-persisted session mutates `SessionState` locally (such as mid-turn step salvage,
+    /// `/undo`, proposal rejection, or ghost-dismissal), ensuring cross-pane `/resume` restores
+    /// exact LLM history and usage without creating phantom rows.
     pub(super) async fn persist_history_if_present(&self) {
         if self.incognito {
             return;
         }
-        let history_json_opt = {
+        let payload_opt = {
             let state_lock = self.state.lock().await;
             if state_lock.is_headless || state_lock.history.is_empty() {
                 None
             } else {
-                serde_json::to_string(&state_lock.history).ok()
+                serde_json::to_string(&state_lock.history).ok().map(|json| {
+                    (
+                        json,
+                        i64::try_from(state_lock.total_tokens).unwrap_or(i64::MAX),
+                        i64::try_from(state_lock.context_tokens).unwrap_or(i64::MAX),
+                        state_lock.total_cost_usd,
+                    )
+                })
             }
         };
-        let Some(history_json) = history_json_opt else {
+        let Some((history_json, total_tokens, context_tokens, total_cost_usd)) = payload_opt else {
             return;
         };
         let db_opt = self.db.lock().await.clone();
         if let Some(db) = db_opt {
             let store = boxxy_db::store::Store::new(db.pool());
             let _ = store
-                .update_session_history(&self.session_id, &history_json)
+                .update_session_history_and_usage(
+                    &self.session_id,
+                    &history_json,
+                    total_tokens,
+                    context_tokens,
+                    total_cost_usd,
+                )
                 .await;
         }
     }

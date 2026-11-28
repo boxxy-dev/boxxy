@@ -201,7 +201,7 @@ impl Currency {
             .unwrap_or_else(|| self.fallback_rate_from_usd())
     }
 
-    /// Formats a USD amount converted into this currency (e.g. `"$0.05"`, `"€0.05"`, `"R$0.29"`).
+    /// Formats a USD amount converted into this currency (e.g. `"$0.05"`, `"€0.05"`, `"R$0.29"`, `"₹1,425.90"`).
     #[must_use]
     pub fn format_from_usd(self, usd_amount: f64) -> String {
         let safe_usd = if usd_amount.is_finite() && usd_amount > 0.0 {
@@ -210,7 +210,7 @@ impl Currency {
             0.0
         };
         let converted = safe_usd * self.rate_from_usd();
-        format!("{}{converted:.2}", self.symbol())
+        boxxy_claw_protocol::format_currency_amount(self.symbol(), converted)
     }
 }
 

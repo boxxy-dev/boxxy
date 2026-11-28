@@ -208,6 +208,19 @@ pub enum ClawEngineEvent {
         #[serde(default)]
         total_cost_usd: f64,
     },
+    /// Synchronizes authoritative session-level context and cost metrics to the UI
+    /// (for out-of-band tool spend like `generate_image`, Phantom Swarm child workers,
+    /// mid-turn step salvage on abort/rejection/sleep, `[SILENT_ACK]` turns, post-compaction
+    /// context scaling, and live context-window hot-reloads).
+    UsageUpdated {
+        total_tokens: u64,
+        #[serde(default)]
+        context_tokens: u64,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        context_window: Option<u64>,
+        #[serde(default)]
+        total_cost_usd: f64,
+    },
     AgentThinking {
         is_thinking: bool,
         agent_name: String,
@@ -501,7 +514,8 @@ impl ClawEngineEvent {
             | Self::Evicted
             | Self::PushGlobalNotification { .. }
             | Self::QueueUpdated { .. }
-            | Self::QueuedPromptRecalled { .. } => None,
+            | Self::QueuedPromptRecalled { .. }
+            | Self::UsageUpdated { .. } => None,
         }
     }
 
@@ -550,7 +564,8 @@ impl ClawEngineEvent {
             | Self::Evicted
             | Self::PushGlobalNotification { .. }
             | Self::QueueUpdated { .. }
-            | Self::QueuedPromptRecalled { .. } => None,
+            | Self::QueuedPromptRecalled { .. }
+            | Self::UsageUpdated { .. } => None,
         }
     }
 }

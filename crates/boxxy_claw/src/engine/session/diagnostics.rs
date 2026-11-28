@@ -245,11 +245,15 @@ impl ClawSession {
         let mut state_lock = self.state.lock().await;
         if let Some((prompt, snapshot, cwd)) = state_lock.pending_lazy_diagnosis.take() {
             if let Some(handle) = current_turn.take() {
-                let _ = state_lock.salvage_in_flight_tool_steps();
+                let (_, salvaged_usage) = state_lock.salvage_in_flight_tool_steps();
                 handle.abort();
                 let spk_name = self.name.clone();
                 let spk_cid = self.character_id.clone();
                 drop(state_lock);
+                if salvaged_usage {
+                    self.persist_history_if_present().await;
+                    self.emit_usage_updated().await;
+                }
                 let _ = self
                     .tx_ui
                     .send(ClawEngineEvent::AgentThinking {

@@ -706,9 +706,9 @@ impl ClawSession {
                     return false;
                 }
 
-                let (speaker_name, speaker_cid) = {
+                let ((speaker_name, speaker_cid), salvaged_usage) = {
                     let mut state_lock = self.state.lock().await;
-                    let _ = state_lock.salvage_in_flight_tool_steps();
+                    let (_, salvaged_usage) = state_lock.salvage_in_flight_tool_steps();
                     if let Some(handle) = ctx.current_turn.take() {
                         handle.abort();
                     }
@@ -735,7 +735,7 @@ impl ClawSession {
                     state_lock
                         .history
                         .push(rig::message::Message::assistant(tagged));
-                    (spk_name, spk_cid)
+                    ((spk_name, spk_cid), salvaged_usage)
                 };
 
                 let _ = self
@@ -759,6 +759,9 @@ impl ClawSession {
                 };
                 crate::engine::turn::persistence::perform_persistence(p_ctx, self.state.clone())
                     .await;
+                if salvaged_usage {
+                    self.emit_usage_updated().await;
+                }
 
                 let _ = self.tx_self.send(ClawMessage::TurnFinished).await;
             }

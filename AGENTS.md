@@ -3,7 +3,7 @@
 ## Observability & Debugging
 
 Boxxy provides deep, real-time visibility into LLM interactions for developers and power users:
-- **Cumulative Token & Cost Analytics:** Every session tracks active context window tokens, model context window percentage (`% used`), cumulative tokens, and cumulative USD cost (`$ spent`) via `rig::catalog::Catalog::builtin()`, persisted in `boxxy-db` and re-rendered during session resumption.
+- **Cumulative Token & Cost Analytics:** Every session tracks active context window tokens (`display_tokens()`, strictly isolated from `/btw` side-channel and subagent/image totals), model context window percentage (`% used`), cumulative tokens, and cumulative USD cost (`$ spent`, hidden when `$0.00` on subscription/local models like `ChatGPT`, `OpenCode Go`, and `Ollama`, and formatted with thousands separators) via per-call tier-aware `rig::catalog::Catalog::builtin()` pricing (`tiers` / `context_over_200k` / `reasoning`), synchronized live via `ClawEngineEvent::UsageUpdated` (across compaction, mid-turn step salvage, `generate_image`, `[SILENT_ACK]`, and `summon_headless_worker` child workers), persisted in `boxxy-db`, and re-rendered during session resumption.
 - **Dedicated Context Debugging:** To audit the exact payloads (System Prompt, History, Tools) sent to models, pass `--debug-context` (`boxxy-terminal --debug-context`) or run with:
   ```bash
   BOXXY_DEBUG_CONTEXT=1 cargo run

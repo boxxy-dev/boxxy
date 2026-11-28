@@ -194,15 +194,19 @@ impl ClawSession {
 
         if let Some(handle) = ctx.current_turn.take() {
             had_active = true;
-            let (thinking_name, thinking_cid) = {
+            let ((thinking_name, thinking_cid), salvaged_usage) = {
                 let mut state_lock = self.state.lock().await;
                 // Salvage completed mid-turn tool steps BEFORE `handle.abort()` drops `InFlightClearGuard`.
-                let _ = state_lock.salvage_in_flight_tool_steps();
+                let (_, salvaged_usage) = state_lock.salvage_in_flight_tool_steps();
                 state_lock.current_turn_user_images.clear();
                 state_lock.generated_images_this_turn.clear();
                 handle.abort();
-                state_lock.effective_speaker()
+                (state_lock.effective_speaker(), salvaged_usage)
             };
+            if salvaged_usage {
+                self.persist_history_if_present().await;
+                self.emit_usage_updated().await;
+            }
             let _ = self
                 .tx_ui
                 .send(ClawEngineEvent::AgentThinking {

@@ -22,7 +22,7 @@ use boxxy_core_toolbox::{
 use rig::agent::Agent;
 use rig::agent::hook::{
     AgentHook, CompletionCallAction, CompletionCallEvent, DispatchAction, DispatchEvent,
-    HookContext,
+    HookContext, ModelTurnAction, ModelTurnFinished,
 };
 use rig::message::Message;
 use rig::tool::server::ToolServer;
@@ -32,13 +32,15 @@ use std::sync::Arc;
 
 const BTW_STREAM_INTERVAL: std::time::Duration = std::time::Duration::from_millis(45);
 
-/// Captures the exact committed `Arc<Message>` transcript passed to each model step of an
-/// active `chat_streaming` turn so concurrent `/btw` side queries see settled tool results
-/// and hit the warm provider KV prompt cache without acquiring async locks.
+/// Captures the exact committed `Arc<Message>` transcript and per-step billed `Usage`
+/// across an active `chat_streaming` turn so concurrent `/btw` side queries see settled
+/// tool results and aborted/rejected turns salvage already-billed model steps cleanly.
 #[derive(Clone)]
 struct InFlightTranscriptHook {
     slot: Arc<std::sync::Mutex<crate::engine::session::InFlightSnapshot>>,
     turn_start_idx: usize,
+    model: Option<boxxy_model_selection::ModelProvider>,
+    endpoints: Vec<boxxy_model_selection::OpenAiCompatibleEndpoint>,
 }
 
 impl AgentHook for InFlightTranscriptHook {
@@ -60,6 +62,39 @@ impl AgentHook for InFlightTranscriptHook {
             guard.active_status = Some("Thinking…".to_string());
         }
         async { CompletionCallAction::Continue }
+    }
+
+    fn on_model_turn_finished(
+        &self,
+        _ctx: &HookContext,
+        event: ModelTurnFinished<'_>,
+    ) -> impl Future<Output = ModelTurnAction> + WasmCompatSend {
+        if event.usage.is_reported() {
+            let enriched = boxxy_ai_core::enrich_usage_with_endpoints_cost(
+                event.usage,
+                &self.model,
+                &self.endpoints,
+            );
+            let wrapper = boxxy_claw_protocol::UsageWrapper::from(enriched);
+            let step_total = wrapper.total_tokens();
+            let step_ctx = wrapper.effective_context_tokens();
+            let step_cost = wrapper
+                .cost_usd
+                .filter(|&c| c.is_finite() && c > 0.0)
+                .unwrap_or(0.0);
+            if step_total > 0 || step_ctx > 0 || step_cost > 0.0 {
+                let mut guard = self
+                    .slot
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                guard.settled_tokens = guard.settled_tokens.saturating_add(step_total);
+                if step_ctx > 0 {
+                    guard.settled_context_tokens = step_ctx;
+                }
+                guard.settled_cost_usd += step_cost;
+            }
+        }
+        async { ModelTurnAction::Continue }
     }
 }
 
@@ -276,8 +311,8 @@ impl ClawAgent {
         let endpoints = &self.config.openai_compatible_endpoints;
         let context_window =
             boxxy_ai_core::model_context_window_with_endpoints(&self.config.model, endpoints);
-        let usage = boxxy_ai_core::enrich_usage_with_endpoints_cost(
-            res.usage,
+        let usage = boxxy_ai_core::enrich_prompt_response_usage(
+            &res,
             &self.config.model,
             endpoints,
         );
@@ -349,6 +384,8 @@ impl ClawAgent {
                     .add_hook(InFlightTranscriptHook {
                         slot: sctx.in_flight_snapshot.clone(),
                         turn_start_idx,
+                        model: self.config.model.clone(),
+                        endpoints: self.config.openai_compatible_endpoints.clone(),
                     })
                     .tool_concurrency(4)
                     .ordered_by_footprint(true)
@@ -569,8 +606,8 @@ impl ClawAgent {
                     &self.config.model,
                     endpoints,
                 );
-                let usage = boxxy_ai_core::enrich_usage_with_endpoints_cost(
-                    res.usage,
+                let usage = boxxy_ai_core::enrich_prompt_response_usage(
+                    &res,
                     &self.config.model,
                     endpoints,
                 );

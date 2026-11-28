@@ -191,7 +191,7 @@ pub(super) async fn run_whats_new_turn(
                 &effective_model,
                 &settings.openai_compatible_endpoints,
             );
-            let usage_wrapper = usage_opt.map(|u| {
+            let mut usage_wrapper = usage_opt.map(|u| {
                 let mut w = boxxy_claw_protocol::UsageWrapper::from(u);
                 w.context_window = context_window;
                 w
@@ -202,8 +202,10 @@ pub(super) async fn run_whats_new_turn(
                 state_lock.history.push(rig::message::Message::assistant(
                     history::tag_assistant_text(&character_id, &agent_name, &display_response),
                 ));
+                state_lock.current_context_window = context_window;
                 if let Some(ref usage) = usage_wrapper {
-                    state_lock.total_tokens += usage.total_tokens();
+                    state_lock.total_tokens =
+                        state_lock.total_tokens.saturating_add(usage.total_tokens());
                     let ctx = usage.effective_context_tokens();
                     if ctx > 0 {
                         state_lock.context_tokens = ctx;
@@ -226,7 +228,21 @@ pub(super) async fn run_whats_new_turn(
                 db: db.clone(),
                 tx_self: tx_self.clone(),
             };
-            persistence::perform_persistence(p_ctx, state).await;
+            persistence::perform_persistence(p_ctx, state.clone()).await;
+
+            let (auth_total_tokens, auth_context_tokens, auth_total_cost) = {
+                let state_lock = state.lock().await;
+                (
+                    state_lock.total_tokens,
+                    state_lock.context_tokens,
+                    state_lock.total_cost_usd,
+                )
+            };
+            if let Some(ref mut u) = usage_wrapper
+                && auth_context_tokens > 0
+            {
+                u.context_tokens = Some(auth_context_tokens);
+            }
 
             if !display_response.is_empty() || !trace.is_empty() {
                 let event = ClawEngineEvent::DiagnosisComplete {
@@ -240,6 +256,14 @@ pub(super) async fn run_whats_new_turn(
                 persist_visual_event(db, session_id, pane_id, &event);
                 let _ = tx_ui.send(event).await;
             }
+            let _ = tx_ui
+                .send(ClawEngineEvent::UsageUpdated {
+                    total_tokens: auth_total_tokens,
+                    context_tokens: auth_context_tokens,
+                    context_window,
+                    total_cost_usd: auth_total_cost,
+                })
+                .await;
         }
         Err(e) => {
             state.lock().await.last_turn_paused_queue = true;

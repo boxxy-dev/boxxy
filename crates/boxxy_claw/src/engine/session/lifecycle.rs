@@ -224,6 +224,7 @@ impl ClawSession {
         let current_status = state_lock.status.clone();
         let parent_id = state_lock.parent_id;
 
+        let mut salvaged_usage_on_abort = false;
         match crate::engine::fsm::router::FsmRouter::evaluate_transition(
             &current_status,
             parent_id,
@@ -231,7 +232,8 @@ impl ClawSession {
         ) {
             Ok(crate::engine::fsm::router::FsmAction::AbortCurrentTurn) => {
                 if let Some(handle) = current_turn.take() {
-                    let _ = state_lock.salvage_in_flight_tool_steps();
+                    let (_, salvaged_usage) = state_lock.salvage_in_flight_tool_steps();
+                    salvaged_usage_on_abort = salvaged_usage;
                     handle.abort();
 
                     // Notify UI that thinking has stopped
@@ -315,6 +317,11 @@ impl ClawSession {
         let character_id = self.character_id.clone();
         drop(state_lock);
 
+        if salvaged_usage_on_abort {
+            self.persist_history_if_present().await;
+            self.emit_usage_updated().await;
+        }
+
         if entering_sleep {
             let workspace = crate::registry::workspace::global_workspace().await;
             let cwd = workspace
@@ -364,10 +371,23 @@ impl ClawSession {
         if self.incognito {
             boxxy_preferences::Settings::reload();
             let after = boxxy_preferences::Settings::load();
-            let mut state_lock = self.state.lock().await;
-            state_lock.persistent_agent = None;
-            state_lock.current_claw_model = after.claw_model.clone();
-            state_lock.current_memory_model = after.effective_memory_model();
+            let new_context_window = boxxy_ai_core::model_context_window_with_endpoints(
+                &after.claw_model,
+                &after.openai_compatible_endpoints,
+            );
+            let window_changed = {
+                let mut state_lock = self.state.lock().await;
+                let changed = state_lock.current_context_window != new_context_window
+                    || state_lock.current_claw_model != after.claw_model;
+                state_lock.persistent_agent = None;
+                state_lock.current_claw_model = after.claw_model.clone();
+                state_lock.current_context_window = new_context_window;
+                state_lock.current_memory_model = after.effective_memory_model();
+                changed
+            };
+            if window_changed {
+                self.emit_usage_updated().await;
+            }
             return;
         }
 
@@ -460,12 +480,13 @@ impl ClawSession {
             )
         };
 
-        let (old_claw, old_memory, old_search) = {
+        let (old_claw, old_memory, old_search, old_context_window) = {
             let state_lock = self.state.lock().await;
             (
                 model_label(&state_lock.current_claw_model),
                 model_label(&state_lock.current_memory_model),
                 state_lock.current_search_label.clone(),
+                state_lock.current_context_window,
             )
         };
 
@@ -550,12 +571,19 @@ impl ClawSession {
         }
 
         if new_claw == old_claw && new_memory == old_memory && new_search == old_search {
+            if new_context_window != old_context_window {
+                self.state.lock().await.current_context_window = new_context_window;
+                if !character_changed {
+                    self.emit_usage_updated().await;
+                }
+            }
             return;
         }
 
         {
             let mut state_lock = self.state.lock().await;
             state_lock.current_claw_model = resolved_claw_model;
+            state_lock.current_context_window = new_context_window;
             state_lock.current_memory_model = resolved_memory_model;
             state_lock.current_search_label = new_search;
         }
@@ -622,6 +650,7 @@ impl ClawSession {
                 &settings.claw_model,
                 &settings.openai_compatible_endpoints,
             );
+            self.state.lock().await.current_context_window = context_window;
             let _ = self
                 .tx_ui
                 .send(ClawEngineEvent::Identity {
@@ -738,6 +767,7 @@ impl ClawSession {
         {
             let mut state_lock = self.state.lock().await;
             state_lock.current_claw_model = resolved_claw_model;
+            state_lock.current_context_window = context_window;
             state_lock.current_memory_model = settings.effective_memory_model();
             state_lock.current_search_label = search_label;
         }

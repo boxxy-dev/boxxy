@@ -410,13 +410,32 @@ impl Store<'_> {
         Ok(())
     }
 
-    /// Updates `history_json` for an already-persisted session (such as after `/undo` or an
-    /// explicit proposal rejection) without creating a phantom row or overwriting `title`.
-    pub async fn update_session_history(&self, session_id: &str, history_json: &str) -> Result<()> {
+    /// Updates `history_json` and session token/cost metrics for an already-persisted session
+    /// (such as after mid-turn step salvage on abort/rejection, `/undo`, or ghost-dismissal)
+    /// without creating a phantom row or overwriting `title`.
+    pub async fn update_session_history_and_usage(
+        &self,
+        session_id: &str,
+        history_json: &str,
+        total_tokens: i64,
+        context_tokens: i64,
+        total_cost_usd: f64,
+    ) -> Result<()> {
         sqlx::query(
-            "UPDATE sessions SET history_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            r"
+            UPDATE sessions
+            SET history_json = ?,
+                total_tokens = ?,
+                context_tokens = ?,
+                total_cost_usd = ?,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            ",
         )
         .bind(history_json)
+        .bind(total_tokens)
+        .bind(context_tokens)
+        .bind(total_cost_usd)
         .bind(session_id)
         .execute(self.pool)
         .await?;
@@ -686,20 +705,35 @@ mod tests {
         assert_eq!(s2.context_tokens, 20);
         assert!((s2.total_cost_usd - 0.04).abs() < 1e-9);
 
-        // `update_session_history` updates `history_json` in-place while preserving `title` and
-        // never inserting a phantom row for a non-existent session ID.
+        // `update_session_history_and_usage` updates `history_json` and usage counters in-place
+        // while preserving `title` and never inserting a phantom row for a non-existent session ID.
         store
-            .update_session_history("sess_nonexistent", "[{\"role\":\"user\"}]")
+            .update_session_history_and_usage(
+                "sess_nonexistent",
+                "[{\"role\":\"user\"}]",
+                900,
+                450,
+                0.09,
+            )
             .await
             .unwrap();
         assert!(store.get_session("sess_nonexistent").await.unwrap().is_none());
 
         store
-            .update_session_history("sess_pin_2", "[{\"role\":\"user\"}]")
+            .update_session_history_and_usage(
+                "sess_pin_2",
+                "[{\"role\":\"user\"}]",
+                900,
+                450,
+                0.09,
+            )
             .await
             .unwrap();
         let s2_hist = store.get_session("sess_pin_2").await.unwrap().unwrap();
         assert_eq!(s2_hist.history_json.as_deref(), Some("[{\"role\":\"user\"}]"));
+        assert_eq!(s2_hist.total_tokens, 900);
+        assert_eq!(s2_hist.context_tokens, 450);
+        assert!((s2_hist.total_cost_usd - 0.09).abs() < 1e-9);
         assert_eq!(s2_hist.title.as_deref(), Some("Second Session"));
     }
 

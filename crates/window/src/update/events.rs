@@ -354,17 +354,15 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
             }
         }
         TerminalEventKind::ClawEvent(p_id, claw_event) => {
-            if is_tab_selected(inner, pos) {
-                let session_usage = inner.tabs[pos].controller.get_session_usage();
-                inner.claw.set_session_usage(session_usage);
-            }
+            let is_active_pane = is_tab_selected(inner, pos)
+                && inner.tabs[pos].controller.active_pane_id() == p_id;
 
             match claw_event {
                 ClawEngineEvent::SessionStateChanged { status, .. } => {
                     inner.tabs[pos]
                         .controller
                         .set_session_status_for_pane(&p_id, status);
-                    if is_tab_selected(inner, pos) {
+                    if is_active_pane {
                         let tc = &inner.tabs[pos];
                         inner.claw.set_pane_state(
                             &tc.controller.agent_name(),
@@ -381,7 +379,7 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                     web_search_enabled,
                     vibe_enabled,
                     ..
-                } if is_tab_selected(inner, pos) => {
+                } if is_active_pane => {
                     let active = inner.tabs[pos].controller.is_claw_active();
                     let sleep = inner.tabs[pos].controller.is_sleep();
                     inner.claw_active = active;
@@ -393,7 +391,7 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                         vibe_enabled,
                     );
                 }
-                ClawEngineEvent::PinStatusChanged(pinned) if is_tab_selected(inner, pos) => {
+                ClawEngineEvent::PinStatusChanged(pinned) if is_active_pane => {
                     let tc = &inner.tabs[pos];
                     inner.claw.set_pane_state(
                         &tc.controller.agent_name(),
@@ -403,7 +401,7 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                         tc.controller.is_vibe(),
                     );
                 }
-                ClawEngineEvent::WebSearchStatusChanged(enabled) if is_tab_selected(inner, pos) => {
+                ClawEngineEvent::WebSearchStatusChanged(enabled) if is_active_pane => {
                     let tc = &inner.tabs[pos];
                     inner.claw.set_pane_state(
                         &tc.controller.agent_name(),
@@ -413,7 +411,7 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                         tc.controller.is_vibe(),
                     );
                 }
-                ClawEngineEvent::VibeStatusChanged(vibe) if is_tab_selected(inner, pos) => {
+                ClawEngineEvent::VibeStatusChanged(vibe) if is_active_pane => {
                     let tc = &inner.tabs[pos];
                     inner.claw.set_pane_state(
                         &tc.controller.agent_name(),
@@ -638,6 +636,11 @@ pub fn handle_terminal_event(inner: &mut AppWindowInner, event: TerminalEvent) {
                     );
                 }
                 _ => {}
+            }
+
+            if pos < inner.tabs.len() && is_tab_selected(inner, pos) {
+                let session_usage = inner.tabs[pos].controller.get_session_usage();
+                inner.claw.set_session_usage(session_usage);
             }
         }
         TerminalEventKind::ZoomIn => {

@@ -7,12 +7,12 @@ use super::context::RunContext;
 
 impl ClawSession {
     pub(super) async fn handle_abort(&self, ctx: &mut RunContext) {
-        let thinking_stop = {
+        let (thinking_stop, salvaged_usage) = {
             let mut state_lock = self.state.lock().await;
             // Salvage completed mid-turn tool steps BEFORE calling `handle.abort()` so
             // `InFlightClearGuard::drop()` on multi-threaded Tokio workers never clears
             // `in_flight_snapshot.messages` ahead of salvage.
-            let _ = state_lock.salvage_in_flight_tool_steps();
+            let (_, salvaged_usage) = state_lock.salvage_in_flight_tool_steps();
             state_lock.current_turn_user_images.clear();
             state_lock.generated_images_this_turn.clear();
             let spk = state_lock.effective_speaker();
@@ -27,7 +27,7 @@ impl ClawSession {
             state_lock.roundtable.pause_for_interjection();
             state_lock.drain_pending_cancel();
             drop(state_lock);
-            had_turn.then_some(spk)
+            (had_turn.then_some(spk), salvaged_usage)
         };
 
         if let Some((thinking_name, thinking_cid)) = thinking_stop {
@@ -47,6 +47,9 @@ impl ClawSession {
         }
 
         self.persist_history_if_present().await;
+        if salvaged_usage {
+            self.emit_usage_updated().await;
+        }
         let _ = ctx
             .workspace
             .drain_pending_commands_for_source(&self.pane_id, "[USER_EXPLICIT_REJECT]".to_string())

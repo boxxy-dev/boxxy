@@ -103,6 +103,12 @@ impl MockToolCall {
 
 pub type DynamicStepFn = Arc<dyn Fn(&RecordedChatRequest) -> MockStep + Send + Sync>;
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MockUsageExtras {
+    pub cached_tokens: Option<u64>,
+    pub wire_cost: Option<f64>,
+}
+
 /// Single scripted completion response queued on [`MockLlmServer`].
 #[derive(Clone)]
 pub enum MockStep {
@@ -111,12 +117,14 @@ pub enum MockStep {
         text: String,
         prompt_tokens: u64,
         completion_tokens: u64,
+        extras: MockUsageExtras,
     },
     ToolCalls {
         thought: Option<String>,
         calls: Vec<MockToolCall>,
         prompt_tokens: u64,
         completion_tokens: u64,
+        extras: MockUsageExtras,
     },
     HttpError {
         status: u16,
@@ -137,24 +145,28 @@ impl std::fmt::Debug for MockStep {
                 text,
                 prompt_tokens,
                 completion_tokens,
+                extras,
             } => f
                 .debug_struct("Text")
                 .field("thought", thought)
                 .field("text", text)
                 .field("prompt_tokens", prompt_tokens)
                 .field("completion_tokens", completion_tokens)
+                .field("extras", extras)
                 .finish(),
             Self::ToolCalls {
                 thought,
                 calls,
                 prompt_tokens,
                 completion_tokens,
+                extras,
             } => f
                 .debug_struct("ToolCalls")
                 .field("thought", thought)
                 .field("calls", calls)
                 .field("prompt_tokens", prompt_tokens)
                 .field("completion_tokens", completion_tokens)
+                .field("extras", extras)
                 .finish(),
             Self::HttpError { status, message } => f
                 .debug_struct("HttpError")
@@ -179,6 +191,7 @@ impl MockStep {
             text: text.into(),
             prompt_tokens: 400,
             completion_tokens: 100,
+            extras: MockUsageExtras::default(),
         }
     }
 
@@ -189,6 +202,7 @@ impl MockStep {
             text: text.into(),
             prompt_tokens: 500,
             completion_tokens: 150,
+            extras: MockUsageExtras::default(),
         }
     }
 
@@ -218,6 +232,36 @@ impl MockStep {
     }
 
     #[must_use]
+    pub fn with_cached_tokens(mut self, cached_tokens: u64) -> Self {
+        match &mut self {
+            Self::Text { extras, .. } | Self::ToolCalls { extras, .. } => {
+                extras.cached_tokens = Some(cached_tokens);
+            }
+            Self::Gated { inner, .. } => {
+                let updated = (**inner).clone().with_cached_tokens(cached_tokens);
+                **inner = updated;
+            }
+            Self::HttpError { .. } | Self::Dynamic(_) => {}
+        }
+        self
+    }
+
+    #[must_use]
+    pub fn with_wire_cost(mut self, cost_usd: f64) -> Self {
+        match &mut self {
+            Self::Text { extras, .. } | Self::ToolCalls { extras, .. } => {
+                extras.wire_cost = Some(cost_usd);
+            }
+            Self::Gated { inner, .. } => {
+                let updated = (**inner).clone().with_wire_cost(cost_usd);
+                **inner = updated;
+            }
+            Self::HttpError { .. } | Self::Dynamic(_) => {}
+        }
+        self
+    }
+
+    #[must_use]
     pub fn dynamic<F>(builder: F) -> Self
     where
         F: Fn(&RecordedChatRequest) -> Self + Send + Sync + 'static,
@@ -232,6 +276,7 @@ impl MockStep {
             calls: vec![MockToolCall::new(name, arguments)],
             prompt_tokens: 450,
             completion_tokens: 80,
+            extras: MockUsageExtras::default(),
         }
     }
 
@@ -242,6 +287,10 @@ impl MockStep {
             calls,
             prompt_tokens: 500,
             completion_tokens: 120,
+            extras: MockUsageExtras {
+                cached_tokens: None,
+                wire_cost: None,
+            },
         }
     }
 
@@ -655,6 +704,7 @@ async fn respond_with_step(
             text,
             prompt_tokens,
             completion_tokens,
+            extras,
         } => {
             respond_text(
                 stream,
@@ -662,6 +712,7 @@ async fn respond_with_step(
                 &text,
                 prompt_tokens,
                 completion_tokens,
+                extras,
                 want_stream,
             )
             .await
@@ -671,6 +722,7 @@ async fn respond_with_step(
             calls,
             prompt_tokens,
             completion_tokens,
+            extras,
         } => {
             respond_tool_calls(
                 stream,
@@ -678,6 +730,7 @@ async fn respond_with_step(
                 &calls,
                 prompt_tokens,
                 completion_tokens,
+                extras,
                 want_stream,
             )
             .await
@@ -686,14 +739,36 @@ async fn respond_with_step(
     }
 }
 
+fn build_usage_json(prompt_tokens: u64, completion_tokens: u64, extras: MockUsageExtras) -> Value {
+    let mut map = serde_json::Map::new();
+    map.insert("prompt_tokens".to_string(), json!(prompt_tokens));
+    map.insert("completion_tokens".to_string(), json!(completion_tokens));
+    map.insert(
+        "total_tokens".to_string(),
+        json!(prompt_tokens.saturating_add(completion_tokens)),
+    );
+    if let Some(cached) = extras.cached_tokens {
+        map.insert(
+            "prompt_tokens_details".to_string(),
+            json!({ "cached_tokens": cached }),
+        );
+    }
+    if let Some(cost) = extras.wire_cost {
+        map.insert("cost".to_string(), json!(cost));
+    }
+    Value::Object(map)
+}
+
 async fn respond_text(
     stream: &mut TcpStream,
     thought: Option<String>,
     text: &str,
     prompt_tokens: u64,
     completion_tokens: u64,
+    extras: MockUsageExtras,
     want_stream: bool,
 ) -> Result<()> {
+    let usage_json = build_usage_json(prompt_tokens, completion_tokens, extras);
     if want_stream {
         let mut sse = String::new();
         let sent_role = thought.is_some_and(|reasoning| {
@@ -734,11 +809,7 @@ async fn respond_text(
                 "delta": {},
                 "finish_reason": "stop"
             }],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens.saturating_add(completion_tokens)
-            }
+            "usage": usage_json
         });
         let _ = writeln!(sse, "data: {stop_chunk}\n");
         sse.push_str("data: [DONE]\n\n");
@@ -758,11 +829,7 @@ async fn respond_text(
                 "message": msg,
                 "finish_reason": "stop"
             }],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens.saturating_add(completion_tokens)
-            }
+            "usage": usage_json
         }))?;
         write_http_response(stream, 200, "application/json", &body).await
     }
@@ -774,8 +841,10 @@ async fn respond_tool_calls(
     calls: &[MockToolCall],
     prompt_tokens: u64,
     completion_tokens: u64,
+    extras: MockUsageExtras,
     want_stream: bool,
 ) -> Result<()> {
+    let usage_json = build_usage_json(prompt_tokens, completion_tokens, extras);
     if want_stream {
         let mut sse = String::new();
         let mut role_delta = serde_json::Map::new();
@@ -825,11 +894,7 @@ async fn respond_tool_calls(
                 "delta": {},
                 "finish_reason": "tool_calls"
             }],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens.saturating_add(completion_tokens)
-            }
+            "usage": usage_json
         });
         let _ = writeln!(sse, "data: {finish_chunk}\n");
         sse.push_str("data: [DONE]\n\n");
@@ -860,11 +925,7 @@ async fn respond_tool_calls(
                 },
                 "finish_reason": "tool_calls"
             }],
-            "usage": {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "total_tokens": prompt_tokens.saturating_add(completion_tokens)
-            }
+            "usage": usage_json
         }))?;
         write_http_response(stream, 200, "application/json", &body).await
     }

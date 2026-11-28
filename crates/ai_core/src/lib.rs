@@ -16,7 +16,7 @@ pub use agent::{
     create_agent_with_options,
 };
 pub use catalog::{
-    enrich_usage_with_catalog_cost, enrich_usage_with_endpoints_cost,
+    enrich_prompt_response_usage, enrich_usage_with_catalog_cost, enrich_usage_with_endpoints_cost,
     extract_response_context_tokens, model_context_window, model_context_window_with_endpoints,
     model_input_limit, model_input_limit_with_endpoints, model_output_limit,
     model_output_limit_with_endpoints, resolve_catalog_spec,
@@ -422,9 +422,13 @@ mod tests {
         ));
         assert_eq!(model_context_window(&terra_61), Some(1_050_000));
         assert_eq!(model_input_limit(&terra_61), Some(922_000));
+        let terra_base_usage = Usage::new().input_tokens(200_000).output_tokens(40_000);
+        let terra_base_priced = enrich_usage_with_catalog_cost(terra_base_usage, &terra_61);
+        assert!((terra_base_priced.cost.expect("base priced").total - 0.40).abs() < 1e-6);
+
         let terra_usage = Usage::new().input_tokens(1_000_000).output_tokens(200_000);
         let terra_priced = enrich_usage_with_catalog_cost(terra_usage, &terra_61);
-        assert!((terra_priced.cost.expect("priced").total - 2.00).abs() < 1e-6);
+        assert!((terra_priced.cost.expect("tiered >272k priced").total - 3.50).abs() < 1e-6);
 
         let deepseek = Some(ModelProvider::DeepSeek(DeepSeekModel::V4_1Flash));
         assert_eq!(model_context_window(&deepseek), Some(1_048_576));

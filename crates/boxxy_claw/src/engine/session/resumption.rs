@@ -116,7 +116,7 @@ impl ClawSession {
                 self.context_tokens = if session.context_tokens > 0 {
                     u64::try_from(session.context_tokens).unwrap_or(0)
                 } else {
-                    self.total_tokens
+                    0
                 };
                 self.total_cost_usd = session.total_cost_usd;
 
@@ -278,6 +278,20 @@ impl ClawSession {
                         }
                     }
 
+                    if self.context_tokens == 0
+                        && let Some(last_ctx) = rows
+                            .iter()
+                            .rev()
+                            .find_map(|r| {
+                                r.usage()
+                                    .map(boxxy_claw_protocol::UsageWrapper::effective_context_tokens)
+                            })
+                            .filter(|&c| c > 0)
+                    {
+                        self.context_tokens = last_ctx;
+                        self.state.lock().await.context_tokens = last_ctx;
+                    }
+
                     if !rows.is_empty() {
                         let _ = self.tx_ui.send(ClawEngineEvent::RestoreHistory(rows)).await;
                     }
@@ -317,6 +331,13 @@ impl ClawSession {
                     &resolved_claw_model,
                     &settings.openai_compatible_endpoints,
                 );
+                if self.context_tokens == 0 && self.total_tokens > 0 {
+                    let fallback_ctx = context_window
+                        .filter(|&w| w > 0)
+                        .map_or(self.total_tokens, |w| self.total_tokens.min(w));
+                    self.context_tokens = fallback_ctx;
+                    self.state.lock().await.context_tokens = fallback_ctx;
+                }
 
                 let _ = self
                     .tx_ui
@@ -366,6 +387,7 @@ impl ClawSession {
                 {
                     let mut state_lock = self.state.lock().await;
                     state_lock.current_claw_model = resolved_claw_model;
+                    state_lock.current_context_window = context_window;
                     state_lock.current_memory_model = settings.effective_memory_model();
                     state_lock.current_search_label = search_label;
                 }
@@ -452,6 +474,7 @@ impl ClawSession {
             &resolved_claw_model,
             &settings.openai_compatible_endpoints,
         );
+        self.state.lock().await.current_context_window = context_window;
 
         let _ = self
             .tx_ui

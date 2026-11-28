@@ -156,6 +156,7 @@ pub struct ClawSidebarComponent {
     memories_lbl: gtk::Label,
     memories_fetch_in_flight: Rc<Cell<bool>>,
     memories_last_fetched: Rc<Cell<Option<Instant>>>,
+    cost_row: gtk::Box,
     cost_lbl: gtk::Label,
     mcp_box: gtk::Box,
     mcp_rows_box: gtk::Box,
@@ -519,6 +520,7 @@ impl ClawSidebarComponent {
         context_box.append(&window_row);
 
         let (cost_row, cost_lbl) = make_kv_row("Spent", "$0.00");
+        cost_row.set_visible(false);
         context_box.append(&cost_row);
         context_box.set_visible(false);
 
@@ -610,6 +612,7 @@ impl ClawSidebarComponent {
             memories_lbl,
             memories_fetch_in_flight: Rc::new(Cell::new(false)),
             memories_last_fetched: Rc::new(Cell::new(None)),
+            cost_row,
             cost_lbl,
             mcp_box,
             mcp_rows_box,
@@ -1185,8 +1188,10 @@ impl ClawSidebarComponent {
             format_number_with_commas(usage.tools_used),
             tool_word
         ));
+        let show_cost = usage.cost_usd.is_finite() && usage.cost_usd > 0.0;
         self.cost_lbl
             .set_label(&currency.format_from_usd(usage.cost_usd));
+        self.cost_row.set_visible(show_cost);
         self.context_box.set_visible(!self.is_new_session.get());
         if self.stats_box.is_visible() {
             self.refresh_memories_count();

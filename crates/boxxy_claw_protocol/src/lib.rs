@@ -32,4 +32,6 @@ pub use trace::{
     ActivitySummary, TraceCategory, TurnTraceItem, busy_tool_label, coalesce_restored_history,
     extract_reasoning_summary, live_reasoning_title, tool_result_to_trace_item,
 };
-pub use usage::{SessionUsage, UsageWrapper, format_number_with_commas, format_usd};
+pub use usage::{
+    SessionUsage, UsageWrapper, format_currency_amount, format_number_with_commas, format_usd,
+};

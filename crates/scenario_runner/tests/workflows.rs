@@ -7,6 +7,8 @@
 mod command_lifecycle_and_continuity;
 #[path = "workflows/companion_panes_and_vibe.rs"]
 mod companion_panes_and_vibe;
+#[path = "workflows/context_and_pricing_accounting.rs"]
+mod context_and_pricing_accounting;
 #[path = "workflows/context_hygiene_and_compaction.rs"]
 mod context_hygiene_and_compaction;
 #[path = "workflows/edit_and_undo.rs"]

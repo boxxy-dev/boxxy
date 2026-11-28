@@ -52,10 +52,18 @@ impl UsageWrapper {
         }
     }
 
-    /// Total tokens across this turn (`input_tokens + output_tokens`), saturated on overflow.
+    /// Total tokens across this turn (`input_tokens + output_tokens`, falling back to
+    /// `context_tokens` only when a gateway reported `total_tokens` without splitting input/output).
     #[must_use]
     pub const fn total_tokens(&self) -> u64 {
-        self.input_tokens.saturating_add(self.output_tokens)
+        let summed = self.input_tokens.saturating_add(self.output_tokens);
+        if summed > 0 {
+            summed
+        } else if let Some(ctx) = self.context_tokens {
+            ctx
+        } else {
+            0
+        }
     }
 
     /// Context window footprint of the final call in this turn, falling back to `total_tokens()`.
@@ -126,14 +134,13 @@ impl SessionUsage {
         }
     }
 
-    /// Tokens to display in the Context header (`context_tokens` when non-zero, else `total_tokens`).
+    /// Tokens currently occupying the active conversation's context window.
+    ///
+    /// Never falls back to cumulative `total_tokens`, ensuring side-channel `/btw` queries
+    /// or subagent/image calls never inflate context window occupancy or `% used`.
     #[must_use]
     pub const fn display_tokens(&self) -> u64 {
-        if self.context_tokens > 0 {
-            self.context_tokens
-        } else {
-            self.total_tokens
-        }
+        self.context_tokens
     }
 
     /// Applies a turn's `UsageWrapper` to this session accumulator.
@@ -209,16 +216,38 @@ pub fn format_number_with_commas(mut n: u64) -> String {
     std::str::from_utf8(&buf[pos..]).unwrap_or("0").to_string()
 }
 
-/// Formats a USD amount like `OpenCode`'s `Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })`
-/// (e.g. `0.05` -> `"$0.05"`).
+/// Formats a non-negative currency value rounded to 2 decimal places with ASCII comma
+/// thousands separators (e.g. `("$", 1234.567)` -> `"$1,234.57"`, `("₹", 1425.9)` -> `"₹1,425.90"`).
 #[must_use]
-pub fn format_usd(amount: f64) -> String {
+#[expect(
+    clippy::cast_possible_truncation,
+    clippy::cast_sign_loss,
+    reason = "clamped finite non-negative cent count fits comfortably in u64"
+)]
+pub fn format_currency_amount(symbol: &str, amount: f64) -> String {
     let safe = if amount.is_finite() && amount > 0.0 {
         amount
     } else {
         0.0
     };
-    format!("${safe:.2}")
+    let scaled = (safe * 100.0).round();
+    let cents = if scaled.is_finite() && scaled >= 0.0 && scaled < (u64::MAX as f64) {
+        scaled as u64
+    } else {
+        0
+    };
+    format!(
+        "{symbol}{}.{:02}",
+        format_number_with_commas(cents / 100),
+        cents % 100
+    )
+}
+
+/// Formats a USD amount like `OpenCode`'s `Intl.NumberFormat("en-US", { style: "currency", currency: "USD" })`
+/// (e.g. `0.05` -> `"$0.05"`, `1234.567` -> `"$1,234.57"`).
+#[must_use]
+pub fn format_usd(amount: f64) -> String {
+    format_currency_amount("$", amount)
 }
 
 #[cfg(test)]
@@ -281,12 +310,34 @@ mod tests {
         assert_eq!(format_usd(f64::INFINITY), "$0.00");
         assert_eq!(format_usd(0.0512), "$0.05");
         assert_eq!(format_usd(1.2), "$1.20");
+        assert_eq!(format_usd(1_234.567), "$1,234.57");
+        assert_eq!(format_currency_amount("₹", 1_425.9), "₹1,425.90");
+
+        // Total-only gateway fallback in UsageWrapper::total_tokens()
+        let total_only = UsageWrapper::from_raw(None, None, Some(420), None, None, Some(0.01));
+        assert_eq!(total_only.total_tokens(), 420);
 
         let mut su = SessionUsage {
             cost_usd: f64::NAN,
             ..SessionUsage::default()
         };
         assert_eq!(su.context_percent(), None);
+
+        // Turn-0 `/btw` side query accumulates total_tokens & cost without polluting display_tokens / % used
+        su.record_side_turn(&UsageWrapper {
+            input_tokens: 1_500,
+            output_tokens: 100,
+            reasoning_tokens: None,
+            cached_input_tokens: None,
+            cost_usd: Some(0.02),
+            context_tokens: Some(1_600),
+            context_window: Some(1_048_576),
+        });
+        assert_eq!(su.total_tokens, 1_600);
+        assert_eq!(su.context_tokens, 0);
+        assert_eq!(su.display_tokens(), 0);
+        assert_eq!(su.context_percent(), Some(0));
+        assert!((su.cost_usd - 0.02).abs() < 1e-9);
 
         su.record_turn(&UsageWrapper {
             input_tokens: 20_000,
@@ -298,11 +349,11 @@ mod tests {
             context_window: Some(1_048_576),
         });
 
-        assert_eq!(su.total_tokens, 25_236);
+        assert_eq!(su.total_tokens, 26_836);
         assert_eq!(su.context_tokens, 25_236);
         assert_eq!(su.context_window, Some(1_048_576));
         assert_eq!(su.context_percent(), Some(2));
-        assert!((su.cost_usd - 0.05).abs() < 1e-9);
+        assert!((su.cost_usd - 0.07).abs() < 1e-9);
 
         // Zero context_window or unpriced local model preserves valid window & accumulated cost
         su.record_turn(&UsageWrapper {
@@ -314,9 +365,9 @@ mod tests {
             context_tokens: Some(26_736),
             context_window: Some(0),
         });
-        assert_eq!(su.total_tokens, 26_736);
+        assert_eq!(su.total_tokens, 28_336);
         assert_eq!(su.context_window, Some(1_048_576));
-        assert!((su.cost_usd - 0.05).abs() < 1e-9);
+        assert!((su.cost_usd - 0.07).abs() < 1e-9);
 
         // Side-turn (/btw) usage accumulates total_tokens and cost_usd without clobbering context_tokens
         su.record_side_turn(&UsageWrapper {
@@ -328,8 +379,8 @@ mod tests {
             context_tokens: Some(4_200),
             context_window: Some(1_048_576),
         });
-        assert_eq!(su.total_tokens, 30_936);
+        assert_eq!(su.total_tokens, 32_536);
         assert_eq!(su.context_tokens, 26_736);
-        assert!((su.cost_usd - 0.06).abs() < 1e-9);
+        assert!((su.cost_usd - 0.08).abs() < 1e-9);
     }
 }

@@ -726,18 +726,24 @@ pub fn spawn_turn(
         };
 
         let start_time = std::time::Instant::now();
+        let mut salvaged_on_stream_err = false;
         let stream_res = {
             let _in_flight_guard = InFlightClearGuard {
                 slot: in_flight_snapshot.clone(),
             };
-            agent
+            let res = agent
                 .chat_streaming(query_for_chat, final_history, Some(stream_ctx))
-                .await
+                .await;
+            if res.is_err() {
+                let (_, salvaged_usage) = state.lock().await.salvage_in_flight_tool_steps();
+                salvaged_on_stream_err = salvaged_usage;
+            }
+            res
         };
 
         match stream_res
         {
-            Ok((response, usage, messages)) => {
+            Ok((response, mut usage, messages)) => {
                 let duration = start_time.elapsed();
                 let _ = tx_ui
                     .send(ClawEngineEvent::AgentThinking {
@@ -858,7 +864,8 @@ pub fn spawn_turn(
                     }
 
                     if let Some(ref usage) = usage {
-                        state_lock.total_tokens += usage.total_tokens();
+                        state_lock.total_tokens =
+                            state_lock.total_tokens.saturating_add(usage.total_tokens());
                         let ctx = usage.effective_context_tokens();
                         if ctx > 0 {
                             state_lock.context_tokens = ctx;
@@ -883,6 +890,33 @@ pub fn spawn_turn(
                         tx_self: tx_self.clone(),
                     };
                     persistence::perform_persistence(p_ctx, state.clone()).await;
+                }
+
+                // Read back authoritative post-compaction session counters and Host model window
+                // so compacted context tokens, `[SILENT_ACK]` turns, and `generate_image` spend
+                // stay 100% synchronized in the UI sidebar without guest-model window bleed.
+                let (auth_total_tokens, auth_context_tokens, host_context_window, auth_total_cost) = {
+                    let mut state_lock = state.lock().await;
+                    let latest_settings = boxxy_preferences::Settings::load();
+                    let host_model =
+                        latest_settings.resolve_character_model(&state_lock.character_id);
+                    let win = boxxy_ai_core::model_context_window_with_endpoints(
+                        &host_model,
+                        &latest_settings.openai_compatible_endpoints,
+                    );
+                    state_lock.current_context_window = win;
+                    (
+                        state_lock.total_tokens,
+                        state_lock.context_tokens,
+                        win,
+                        state_lock.total_cost_usd,
+                    )
+                };
+                if let Some(ref mut u) = usage {
+                    if auth_context_tokens > 0 {
+                        u.context_tokens = Some(auth_context_tokens);
+                    }
+                    u.context_window = host_context_window;
                 }
 
                 let mut command_opt = None;
@@ -982,6 +1016,17 @@ pub fn spawn_turn(
                     let _ = tx_ui.send(event).await;
                 }
 
+                if !is_headless {
+                    let _ = tx_ui
+                        .send(ClawEngineEvent::UsageUpdated {
+                            total_tokens: auth_total_tokens,
+                            context_tokens: auth_context_tokens,
+                            context_window: host_context_window,
+                            total_cost_usd: auth_total_cost,
+                        })
+                        .await;
+                }
+
                 if let Some(request_id) = delegate_reply_id {
                     workspace
                         .complete_delegated_task(request_id, display_response.clone())
@@ -1077,6 +1122,50 @@ pub fn spawn_turn(
                 log::error!(
                     "Pane {pane_id} ({agent_name}): Boxxy-Claw agent failed: {e}"
                 );
+
+                if salvaged_on_stream_err && !is_headless {
+                    let (hist_json_opt, tot_tok, ctx_tok, ctx_win, tot_cost) = {
+                        let state_lock = state.lock().await;
+                        let latest_settings = boxxy_preferences::Settings::load();
+                        let host_model =
+                            latest_settings.resolve_character_model(&state_lock.character_id);
+                        let win = boxxy_ai_core::model_context_window_with_endpoints(
+                            &host_model,
+                            &latest_settings.openai_compatible_endpoints,
+                        );
+                        (
+                            (!state_lock.history.is_empty())
+                                .then(|| serde_json::to_string(&state_lock.history).ok())
+                                .flatten(),
+                            state_lock.total_tokens,
+                            state_lock.context_tokens,
+                            win,
+                            state_lock.total_cost_usd,
+                        )
+                    };
+                    if let Some(history_json) = hist_json_opt
+                        && let Some(db_val) = db.lock().await.clone()
+                    {
+                        let store = boxxy_db::store::Store::new(db_val.pool());
+                        let _ = store
+                            .update_session_history_and_usage(
+                                &session_id_clone,
+                                &history_json,
+                                i64::try_from(tot_tok).unwrap_or(i64::MAX),
+                                i64::try_from(ctx_tok).unwrap_or(i64::MAX),
+                                tot_cost,
+                            )
+                            .await;
+                    }
+                    let _ = tx_ui
+                        .send(ClawEngineEvent::UsageUpdated {
+                            total_tokens: tot_tok,
+                            context_tokens: ctx_tok,
+                            context_window: ctx_win,
+                            total_cost_usd: tot_cost,
+                        })
+                        .await;
+                }
 
                 let friendly_msg = format_turn_error(&e);
 
