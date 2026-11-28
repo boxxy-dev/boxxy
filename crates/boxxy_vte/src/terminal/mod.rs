@@ -256,43 +256,18 @@ impl TerminalWidget {
             return;
         }
 
-        // ── Built-in matchers (registered in priority order) ─────────────────
-
-        // 1. HTTP / HTTPS URLs
-        // Character class: anything that isn't whitespace, box-drawing/Powerline PUA
-        // glyphs, or common URL terminators.
-        self.add_match_regex_str(
-            concat!(
-                r"https?://[^\s)>\]",
-                r#"'""#,
-                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"
-            ),
-            0,
-        );
-
-        // 2. file:// URIs
-        self.add_match_regex_str(
-            concat!(
-                r"file://[^\s)>\]",
-                r#"'""#,
-                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"
-            ),
-            0,
-        );
-
-        // 3. Bare absolute / relative / home-relative Unix paths (with optional :line[:col] suffix).
-        // Supports leading `~`, `.`, `..`, or relative directory names (`workspace/subdir/`),
-        // while excluding surrounding Nerd Font / Powerline PUA icons and box-drawing borders.
-        self.add_match_regex_str(
-            concat!(
-                r"(?:(?:~|\.{1,2}|[A-Za-z0-9._-]+)/[^\s:,;)>\]|*?\\",
-                r#"'""#,
-                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]*|/[^\s:,;)>\]|*?\\",
-                r#"'""#,
-                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+)(?::\d+(?::\d+)?)?"
-            ),
-            0,
-        );
+        // Reuse process-wide compiled regexes (`Regex::clone` is an O(1) `Arc` clone) so
+        // creating new terminal tabs or splits never recompiles Unicode NFAs on the GTK thread.
+        let mut rules = imp.match_rules.borrow_mut();
+        for re in builtin_match_regexes() {
+            let tag = imp.next_match_tag.get();
+            imp.next_match_tag.set(tag + 1);
+            rules.push(imp::MatchRule {
+                id: tag,
+                regex: re.clone(),
+                cursor_name: String::from("pointer"),
+            });
+        }
     }
     pub fn set_font(&self, font: Option<&gtk4::pango::FontDescription>) {
         let imp = self.imp();
@@ -548,13 +523,12 @@ impl TerminalWidget {
         let imp = self.imp();
 
         let case_insensitive = (flags & 0x08) != 0;
-        let full_pattern = if case_insensitive {
-            format!("(?i){}", pattern)
-        } else {
-            pattern.to_string()
-        };
+        let built = regex::RegexBuilder::new(pattern)
+            .case_insensitive(case_insensitive)
+            .size_limit(1 << 20)
+            .build();
 
-        match regex::Regex::new(&full_pattern) {
+        match built {
             Ok(re) => {
                 let tag = imp.next_match_tag.get();
                 imp.next_match_tag.set(tag + 1);
@@ -942,37 +916,36 @@ pub(crate) fn match_row_cells(
     (None, 0, None)
 }
 
+/// Built-in URL and path matchers compiled once per process via `regex::regex!`.
+fn builtin_match_regexes() -> [&'static regex::Regex; 3] {
+    [
+        // 1. HTTP / HTTPS URLs (excluding whitespace, box-drawing/Powerline PUA, and URL terminators)
+        regex::regex!(
+            r#"https?://[^\s)>\]'"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"#
+        ),
+        // 2. file:// URIs
+        regex::regex!(
+            r#"file://[^\s)>\]'"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"#
+        ),
+        // 3. Bare absolute / relative / home-relative Unix paths (with optional :line[:col] suffix)
+        regex::regex!(
+            r#"(?:(?:~|\.{1,2}|[A-Za-z0-9._-]+)/[^\s:,;)>\]|*?\\'"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]*|/[^\s:,;)>\]|*?\\'"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+)(?::\d+(?::\d+)?)?"#
+        ),
+    ]
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{imp, match_row_cells};
+    use super::{builtin_match_regexes, imp, match_row_cells};
     use crate::engine::term::cell::{Cell, Flags};
 
     fn default_rules() -> Vec<imp::MatchRule> {
-        let patterns = [
-            concat!(
-                r"https?://[^\s)>\]",
-                r#"'""#,
-                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"
-            ),
-            concat!(
-                r"file://[^\s)>\]",
-                r#"'""#,
-                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+"
-            ),
-            concat!(
-                r"(?:(?:~|\.{1,2}|[A-Za-z0-9._-]+)/[^\s:,;)>\]|*?\\",
-                r#"'""#,
-                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]*|/[^\s:,;)>\]|*?\\",
-                r#"'""#,
-                r"\u{2500}-\u{259F}\u{E000}-\u{F8FF}\u{F0000}-\u{10FFFF}]+)(?::\d+(?::\d+)?)?"
-            ),
-        ];
-        patterns
+        builtin_match_regexes()
             .into_iter()
             .enumerate()
-            .map(|(idx, pat)| imp::MatchRule {
+            .map(|(idx, re)| imp::MatchRule {
                 id: (idx + 1) as i32,
-                regex: regex::Regex::new(pat).expect("valid regex"),
+                regex: re.clone(),
                 cursor_name: String::from("pointer"),
             })
             .collect()

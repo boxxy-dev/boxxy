@@ -229,10 +229,25 @@ pub fn format_client_init_error(err: &ClientInitializeError) -> String {
     }
 }
 
+/// Returns `true` if `err` wraps `StreamableHttpError::SessionExpired` (e.g. HTTP 404 on a
+/// session-bound POST or SSE resume GET when automatic re-initialization could not recover).
+#[must_use]
+pub fn is_session_expired(err: &ServiceError) -> bool {
+    find_in_error_tree(err, &|cause| {
+        matches!(
+            cause.downcast_ref::<StreamableHttpError<reqwest::Error>>(),
+            Some(StreamableHttpError::SessionExpired)
+        )
+        .then_some(())
+    })
+    .is_some()
+}
+
 /// Formats a [`ServiceError`] from an active MCP session.
 ///
-/// Leverages `rmcp 3.11`'s `ServiceError::auth_challenge()` / `is_authorization_required()`
-/// and enriches transport errors with HTTP 429/5xx `Retry-After` or response-limit metadata.
+/// Leverages `rmcp 3.12`'s `ServiceError::auth_challenge()` / `is_authorization_required()`,
+/// `ListPaginationExceeded` cursor-loop guards, and `SessionExpired` detection, while enriching
+/// transport errors with HTTP 429/5xx `Retry-After` or response-limit metadata.
 #[must_use]
 pub fn format_service_error(err: &ServiceError) -> String {
     if let Some(auth_detail) = find_auth_error_detail(Some(err)) {
@@ -243,6 +258,14 @@ pub fn format_service_error(err: &ServiceError) -> String {
     }
     if err.is_authorization_required() {
         return "Authorization required by MCP server (HTTP 401/403)".to_string();
+    }
+    if let ServiceError::ListPaginationExceeded { max_pages } = err {
+        return format!(
+            "MCP list pagination exceeded safety cap ({max_pages} pages); server may have an infinite nextCursor loop"
+        );
+    }
+    if is_session_expired(err) {
+        return "MCP HTTP session expired on server (HTTP 404)".to_string();
     }
     if let ServiceError::TransportSend(dyn_err) = err {
         if let Some(status_err) = find_http_status_error(Some(dyn_err.error.as_ref())) {
@@ -350,6 +373,30 @@ mod tests {
         assert_eq!(
             format_service_error(&svc_err),
             "MCP HTTP response body exceeded maximum size (16777216 bytes)"
+        );
+    }
+
+    #[test]
+    fn session_expired_and_pagination_cap_errors_are_detected_and_formatted() {
+        let expired_http = StreamableHttpError::<reqwest::Error>::SessionExpired;
+        let svc_expired = ServiceError::TransportSend(DynamicTransportError::new::<
+            ReqwestHttpTransport,
+            RoleClient,
+        >(expired_http));
+        assert!(is_session_expired(&svc_expired));
+        assert!(!is_permanent_failure(&anyhow::Error::new(
+            StreamableHttpError::<reqwest::Error>::SessionExpired
+        )));
+        assert_eq!(
+            format_service_error(&svc_expired),
+            "MCP HTTP session expired on server (HTTP 404)"
+        );
+
+        let pagination_err = ServiceError::ListPaginationExceeded { max_pages: 64 };
+        assert!(!is_session_expired(&pagination_err));
+        assert!(
+            format_service_error(&pagination_err)
+                .contains("exceeded safety cap (64 pages)")
         );
     }
 }

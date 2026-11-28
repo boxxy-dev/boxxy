@@ -28,7 +28,7 @@ uuid = { workspace = true }
 chrono = { workspace = true }
 clap.workspace = true
 notify-debouncer-mini = { workspace = true }
-walkdir = "2.5.0"
+walkdir = { workspace = true }
 boxxy-telemetry = { path = "../telemetry" }
 boxxy-db = { path = "../db" }
 boxxy-preferences = { path = "../preferences" }

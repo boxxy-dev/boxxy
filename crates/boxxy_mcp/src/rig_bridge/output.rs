@@ -31,7 +31,7 @@ fn parse_image_media_type(raw_mime: &str) -> Option<ImageMediaType> {
 /// Builds both the compact observer summary string and the `rig::tool::ToolOutput`.
 ///
 /// Preserves multimodal images and SEP-2106 structured JSON natively while supporting
-/// `rmcp 3.11`'s contentless `CallToolResult`s.
+/// `rmcp 3.11+`'s contentless `CallToolResult`s.
 ///
 /// # Errors
 ///

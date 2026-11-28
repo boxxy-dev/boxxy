@@ -591,3 +591,36 @@ pub fn validate_character_package_dir(dir: &Path) -> CharacterDirDiagnostic {
         error: None,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pathological_dotted_keys_and_malformed_toml_fail_cleanly_without_stack_overflow() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let pack_dir = tmp.path().join("untrusted-pack");
+        fs::create_dir_all(&pack_dir).expect("create pack dir");
+
+        // Deeply nested dotted keys (guarded by `toml 1.2.3` recursion cap) must return
+        // a diagnostic parse error rather than overflowing the thread stack.
+        let deep_dotted = format!(
+            "{} = \"boom\"\n",
+            (0..512).map(|i| format!("k{i}")).collect::<Vec<_>>().join(".")
+        );
+        fs::write(pack_dir.join("CHARACTER.toml"), deep_dotted).expect("write dotted toml");
+
+        let diag = validate_character_package_dir(&pack_dir);
+        assert!(
+            diag.error.is_some(),
+            "deeply nested dotted TOML keys must fail validation cleanly"
+        );
+
+        // Malformed deeply nested inline arrays/tables (`toml 1.2.2` guard) must also error cleanly.
+        let malformed = format!("display_name = {}", "[".repeat(512));
+        fs::write(pack_dir.join("CHARACTER.toml"), malformed).expect("write malformed toml");
+
+        let diag_malformed = validate_character_package_dir(&pack_dir);
+        assert!(diag_malformed.error.is_some());
+    }
+}

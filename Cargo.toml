@@ -55,7 +55,7 @@ type_complexity = "warn"
 nursery = "warn"
 
 [workspace.dependencies]
-anyhow = "1.0.104"
+anyhow = "1.0.105"
 async-trait = "0.1"
 boxxy-model-selection = { path = "crates/model_selection" }
 boxxy-keybindings = { path = "crates/keybindings" }
@@ -80,20 +80,20 @@ tokio = { version = "1.54.1", features = ["full"] }
 futures-channel = "0.3.34"
 futures-util = "0.3.34"
 log = { version = "0.4.35", features = ["std", "serde", "release_max_level_info"] }
-env_logger = "0.11.11"
+env_logger = "0.11.12"
 rig = { version = "0.47.1", default-features = false, features = ["reqwest", "agent", "rustls"] }
 nix = { version = "0.32.0", features = ["process", "term", "fs", "signal", "user"] }
 zbus = { version = "6.5.0", default-features = false, features = ["tokio", "proxy", "service", "tracing", "p2p"] }
 libc = "0.2"
-ashpd = { version = "0.14.0", features = ["open_uri"] }
+ashpd = { version = "0.14.3", features = ["open_uri"] }
 gstreamer = "0.25.4"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp", "gif", "bmp"] }
-regex = "1.13.1"
+regex = "1.13.2"
 parking_lot = "0.13.0"
 base64 = "0.23.1"
 bitflags = "2.13.2"
 home = "0.5.12"
-regex-automata = "0.4.18"
+regex-automata = "0.4.19"
 unicode-width = "0.2.3"
 arc-swap = "1.9.5"
 cursor-icon = "1.2"
@@ -107,17 +107,17 @@ tempfile = "3.27.0"
 tar = "0.4.46"
 flate2 = "1.1.11"
 sha2 = "0.11"
-sqlx = { version = "0.9.0", features = ["sqlite", "runtime-tokio", "macros", "chrono"] }
+sqlx = { version = "0.9.1", features = ["sqlite", "runtime-tokio", "macros", "chrono"] }
 serde_yml = "0.0.13"
 thiserror = "2.0"
 notify = { version = "9.0.0", features = ["tokio"] }
 notify-debouncer-mini = { version = "0.8.0", features = ["tokio"] }
-uuid = { version = "1.29.2", features = ["v4"] }
+uuid = { version = "1.29.3", features = ["v4", "fast-rng"] }
 getrandom = "0.4.3"
 rand = "0.10.4"
-toml = "1.2.1"
+toml = "1.2.3"
 boxxy-bookmarks = { path = "crates/boxxy_bookmarks" }
-sysinfo = { version = "0.40.3", default-features = false, features = ["system", "disk", "component", "gpu"] }
+sysinfo = { version = "0.40.4", default-features = false, features = ["system", "disk", "component", "gpu"] }
 arboard = "3.7.0"
 pulldown-cmark = "0.13.6"
 syntect = "5.3.0"
@@ -126,10 +126,11 @@ boxxy-viewer = { path = "crates/viewer" }
 boxxy-telemetry = { path = "crates/telemetry" }
 boxxy-sys-utils = { path = "crates/sys_utils" }
 boxxy-mcp = { path = "crates/boxxy_mcp" }
-rmcp = { version = "3.11.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "transport-child-process", "transport-async-rw", "which-command"] }
+rmcp = { version = "3.12.0", default-features = false, features = ["client", "transport-streamable-http-client-reqwest", "transport-child-process", "transport-async-rw", "which-command"] }
 serial_test = "4.0.1"
 frizbee = "0.13.0"
-ignore = "0.4.34"
+ignore = "0.4.35"
+walkdir = "2.5.1"
 clap = { version = "4.6", features = ["derive"] }
 clap_complete = "4.6"
 boxxy-cli = { path = "crates/cli" }

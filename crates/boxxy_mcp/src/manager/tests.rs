@@ -628,3 +628,109 @@ async fn mid_session_auth_challenge_on_tools_list_evicts_client_and_trips_breake
 
     server_task.abort();
 }
+
+#[tokio::test]
+async fn numeric_float_ttl_and_unknown_server_capabilities_preserve_typed_tool_catalog() {
+    use rmcp::service::{ClientLifecycleMode, serve_client_with_lifecycle};
+    use serde_json::json;
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let manager = McpClientManager::new();
+    let (server_io, client_io) = tokio::io::duplex(8192);
+    let (server_read, mut server_write) = tokio::io::split(server_io);
+    let mut reader = BufReader::new(server_read).lines();
+
+    let server_task = tokio::spawn(async move {
+        // 1. `server/discover` carrying an unknown capability (`events`) and float `ttlMs: 5000.0`
+        let line1 = reader.next_line().await.unwrap().expect("discover line");
+        let req1: serde_json::Value = serde_json::from_str(&line1).unwrap();
+        let discover_resp = json!({
+            "jsonrpc": "2.0",
+            "id": req1["id"],
+            "result": {
+                "resultType": "complete",
+                "supportedVersions": ["2026-07-28"],
+                "capabilities": {
+                    "tools": {},
+                    "events": { "subscribe": true }
+                },
+                "ttlMs": 5000.0,
+                "cacheScope": "private"
+            }
+        });
+        server_write
+            .write_all(format!("{discover_resp}\n").as_bytes())
+            .await
+            .unwrap();
+        server_write.flush().await.unwrap();
+
+        // 2. `tools/list` returning scientific/float `ttlMs: 1.5e4` (15,000 ms)
+        let line2 = reader.next_line().await.unwrap().expect("tools/list line");
+        let req2: serde_json::Value = serde_json::from_str(&line2).unwrap();
+        let list_resp = json!({
+            "jsonrpc": "2.0",
+            "id": req2["id"],
+            "result": {
+                "resultType": "complete",
+                "tools": [{
+                    "name": "ping_peer",
+                    "description": "Pings a peer",
+                    "inputSchema": { "type": "object" }
+                }],
+                "ttlMs": 1.5e4,
+                "cacheScope": "private"
+            }
+        });
+        server_write
+            .write_all(format!("{list_resp}\n").as_bytes())
+            .await
+            .unwrap();
+        server_write.flush().await.unwrap();
+    });
+
+    let handler = BoxxyClientHandler::new("ext-caps", Arc::downgrade(&manager));
+    let client = Arc::new(
+        serve_client_with_lifecycle(
+            handler,
+            client_io,
+            ClientLifecycleMode::Discover {
+                preferred_versions: vec![rmcp::model::ProtocolVersion::V_2026_07_28],
+            },
+        )
+        .await
+        .expect("discover succeeded"),
+    );
+
+    assert!(
+        client
+            .peer_info()
+            .is_some_and(|info| info.capabilities.extra.contains_key("events")),
+        "Unknown server capabilities should survive round-trip in rmcp 3.12"
+    );
+
+    manager.configs.write().await.insert(
+        "ext-caps".to_string(),
+        sample_stdio_config("ext-caps", "echo"),
+    );
+    manager
+        .active_clients
+        .write()
+        .await
+        .insert("ext-caps".to_string(), client);
+
+    let tools = manager.get_tools("ext-caps").await.expect("tools list");
+    assert_eq!(tools.len(), 1);
+    assert_eq!(tools[0].name.as_ref(), "ping_peer");
+    assert!(
+        manager
+            .tool_cache
+            .read()
+            .await
+            .get("ext-caps")
+            .and_then(|c| c.expires_at)
+            .is_some(),
+        "Float/scientific ttlMs should populate bounded cache expiry"
+    );
+
+    server_task.await.unwrap();
+}

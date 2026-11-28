@@ -17,7 +17,8 @@ use tokio::sync::{Mutex as AsyncMutex, OnceCell, RwLock};
 pub use self::breaker::CircuitBreakerOpenError;
 use self::breaker::{CircuitBreakerState, PERMANENT_CONFIG_COOLDOWN, TRANSIENT_COOLDOWN};
 use crate::client::error::{
-    format_service_error, is_anyhow_connection_refused, is_permanent_failure, parse_retry_after_ms,
+    format_service_error, is_anyhow_connection_refused, is_permanent_failure, is_session_expired,
+    parse_retry_after_ms,
 };
 use crate::client::handler::BoxxyClientHandler;
 use crate::client::http::{is_loopback_http_url, probe_loopback_http_port};
@@ -26,14 +27,14 @@ use crate::rig_bridge::tool::{DynamicMcpTool, McpToolObserver};
 
 pub type McpClientWrapper = RunningService<RoleClient, BoxxyClientHandler>;
 
-/// Grace period for `RunningService::close_with_timeout`: accommodates `rmcp 3.11`'s
+/// Grace period for `RunningService::close_with_timeout`: accommodates `rmcp 3.12`'s
 /// 3s stdin-EOF wait + `SIGTERM` + 3s wait on Stdio and 5s `DELETE` cleanup on HTTP.
 const GRACEFUL_CLOSE_TIMEOUT: Duration = Duration::from_secs(7);
 
 #[derive(Debug, Clone)]
 pub(super) struct CachedToolList {
     pub(super) tools: Vec<McpToolDefinition>,
-    /// Optional expiration derived from `rmcp 3.11`'s merged `ttlMs` cache hint across pages.
+    /// Optional expiration derived from `rmcp 3.12`'s merged `ttlMs` cache hint across pages.
     /// `None` when the server omitted `ttlMs` (e.g. stateful `2025-11-25` sessions that
     /// invalidate via `notifications/tools/list_changed`).
     pub(super) expires_at: Option<Instant>,
@@ -579,6 +580,7 @@ impl McpClientManager {
                         return ToolFetchOutcome::AuthRequired(formatted);
                     }
                     if matches!(e, ServiceError::TransportClosed)
+                        || is_session_expired(&e)
                         || client.is_closed()
                         || client.is_transport_closed()
                     {

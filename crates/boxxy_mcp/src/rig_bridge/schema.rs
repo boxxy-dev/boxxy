@@ -10,7 +10,7 @@ use serde_json::{Map, Value, json};
 /// 2. Ensures the root schema is an `"object"` with `"properties": {}`.
 /// 3. Ensures nested `"type": "object"` or `"type": ["object", "null"]` schemas without
 ///    `properties`, `additionalProperties`, `patternProperties`, or `unevaluatedProperties`
-///    carry `"properties": {}`, while preserving Draft-07 property-name `dependencies` arrays (`rmcp 3.11`).
+///    carry `"properties": {}`, while preserving Draft-07 property-name `dependencies` arrays (`rmcp 3.10+`).
 #[must_use]
 pub fn translate_schema(mut schema: Value) -> Value {
     if !schema.is_object() {

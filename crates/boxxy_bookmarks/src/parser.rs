@@ -1,9 +1,4 @@
-use regex::Regex;
-use std::sync::LazyLock;
-
-/// Compiled once per process rather than on every keystroke or card bind.
-static PLACEHOLDER_RE: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"\{\{\{([^}]+)\}\}\}").expect("valid placeholder regex"));
+use regex::regex;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BookmarkTemplate {
@@ -15,8 +10,10 @@ impl BookmarkTemplate {
     #[must_use]
     pub fn parse(script: &str) -> Self {
         let mut placeholders = Vec::new();
+        // Compiled once per process via `regex::regex!` rather than on every keystroke or card bind.
+        let placeholder_re = regex!(r"\{\{\{([^}]+)\}\}\}");
 
-        for cap in PLACEHOLDER_RE.captures_iter(script) {
+        for cap in placeholder_re.captures_iter(script) {
             let name = cap[1].trim().to_string();
             if !name.is_empty() && !placeholders.contains(&name) {
                 placeholders.push(name);

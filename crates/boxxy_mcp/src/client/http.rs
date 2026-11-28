@@ -24,7 +24,7 @@ use crate::config::MIN_TIMEOUT_MS;
 /// Maximum number of same-origin 307/308 redirects followed per request.
 const MAX_REDIRECTS: usize = 10;
 
-/// Redirect policy matching `rmcp 3.11.0`'s Streamable HTTP semantics:
+/// Redirect policy matching `rmcp 3.12.0`'s Streamable HTTP semantics:
 /// follows only same-origin 307/308 redirects (up to 10 hops) so JSON-RPC POST
 /// bodies are preserved and custom headers / session IDs are never leaked to
 /// another origin or rewritten into bodyless GET requests (301/302/303).

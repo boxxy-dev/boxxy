@@ -12,7 +12,7 @@ use serde_json::Value;
 use super::output::build_tool_outputs;
 pub use super::output::format_call_tool_result;
 use super::schema::translate_schema;
-use crate::client::error::format_service_error;
+use crate::client::error::{format_service_error, is_session_expired};
 use crate::config::MIN_TIMEOUT_MS;
 use crate::manager::{McpClientManager, McpClientWrapper};
 
@@ -154,6 +154,7 @@ async fn execute_mcp_tool_call(
         }
         Ok(Err(e)) => {
             if (matches!(e, ServiceError::TransportClosed)
+                || is_session_expired(&e)
                 || client.is_closed()
                 || client.is_transport_closed())
                 && let Some(mgr) = &ctx.manager

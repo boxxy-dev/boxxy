@@ -567,4 +567,30 @@ mod tests {
             .expect("timed out waiting for edit after directory replacement")
             .expect("watcher channel closed unexpectedly");
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn dir_snapshot_detects_symlink_loops_above_walk_root_without_hanging() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let ancestor = tmp.path().join("workspace_root");
+        let characters_dir = ancestor.join("boxxyclaw").join("characters");
+        let pack_dir = characters_dir.join("alpha");
+        std::fs::create_dir_all(&pack_dir).expect("create pack dir");
+        std::fs::write(
+            pack_dir.join("CHARACTER.toml"),
+            "id = \"1\"\nname = \"alpha\"\n",
+        )
+        .expect("write CHARACTER.toml");
+
+        // Symlink inside `characters/alpha/` pointing to an ancestor ABOVE `characters/`
+        // (regression guard for `walkdir 2.5.1` #220 with `follow_links(true)`).
+        std::os::unix::fs::symlink(&ancestor, pack_dir.join("loop_above_root"))
+            .expect("create ancestor symlink");
+
+        let snapshot = get_dir_snapshot(&characters_dir);
+        assert!(
+            snapshot.contains_key(Path::new("alpha/CHARACTER.toml")),
+            "valid character TOML must still be captured despite ancestor symlink cycle"
+        );
+    }
 }
